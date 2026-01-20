@@ -300,11 +300,11 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     table_ax.axis('off')
     table_ax.table(
         cellText=summary_rows,
-        colLabels=['Decay %', 'Avg Days', 'Avg $ Move'],
+        colLabels=['Retracement %', 'Avg Days', 'Avg $ Move'],
         loc='center',
         cellLoc='center'
     )
-    table_ax.set_title("Strategy Decay Sensitivity", fontsize=10, fontweight='bold')
+    table_ax.set_title("Strategy Retracement Sensitivity", fontsize=10, fontweight='bold')
 
     plt.tight_layout()
     plt.show()
@@ -335,4 +335,3 @@ render_persistence_dashboard_streamlit(
     fast_ma=fast_ma,
     slow_ma=slow_ma
 )
-
