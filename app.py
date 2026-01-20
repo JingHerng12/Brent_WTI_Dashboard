@@ -189,7 +189,7 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
 # =========================================================
 # 2) Persistence Dashboard 
 # =========================================================
-def render_persistence_dashboard(lookback, fast_ma, slow_ma):
+def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     # Filter Data
     latest_date = df_base['Timestamp'].max()
     cutoff_date = latest_date - pd.DateOffset(years=lookback)
