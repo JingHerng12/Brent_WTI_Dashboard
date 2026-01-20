@@ -1,6 +1,6 @@
 # Brent–WTI Spread Dashboards (Streamlit)
 
-An interactive **Streamlit dashboard** for analyzing **Brent–WTI crude oil spreads**, focusing on:
+An interactive **dashboard** for analyzing **Brent–WTI crude oil spreads**, focusing on:
 - Spread regimes and statistical positioning
 - Moving-average trend diagnostics
 - Persistence and decay of spread momentum
@@ -47,6 +47,4 @@ Includes:
 - Average **$ move during decay**
 
 
-
-Input file (required):
 
