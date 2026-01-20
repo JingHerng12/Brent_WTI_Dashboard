@@ -1,4 +1,4 @@
-# Brent–WTI Spread Dashboards (Streamlit)
+# Brent–WTI Spread Dashboards 
 
 An interactive **dashboard** for analyzing **Brent–WTI crude oil spreads**, focusing on:
 - Spread regimes and statistical positioning
