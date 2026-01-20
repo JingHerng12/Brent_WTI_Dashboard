@@ -10,7 +10,7 @@ st.set_page_config(page_title="Brent–WTI Dashboards", layout="wide")
 st.title("Brent–WTI Dashboards")
 
 # -----------------------------
-# Load Data once (cached)
+# Load Data  
 # -----------------------------
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
@@ -26,7 +26,7 @@ DATA_PATH = "Brent_WTI_long_data_tidy.xlsx"
 df_base = load_data(DATA_PATH)
 
 # =========================================================
-# Sidebar controls (replaces ipywidgets)
+# Sidebar controls 
 # =========================================================
 st.sidebar.header("Spread Dashboard Controls")
 lookback = st.sidebar.number_input("Lookback (Y)", min_value=1, max_value=30, value=3, step=1)
@@ -51,7 +51,7 @@ fast_ma = st.sidebar.number_input("Fast MA Window", min_value=2, max_value=300, 
 slow_ma = st.sidebar.number_input("Slow MA Window", min_value=5, max_value=600, value=50, step=1)
 
 # =========================================================
-# 1) Spread Dashboard (your original logic, translated to Streamlit display)
+# 1) Spread Dashboard
 # =========================================================
 def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd):
     # Filter Data
@@ -187,7 +187,7 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
     st.write(f"SMA Trend (Lookback {int(ma_window)}D): Weekly={trend_w} | Monthly={trend_m}")
 
 # =========================================================
-# 2) Persistence Dashboard (your code translated to Streamlit display)
+# 2) Persistence Dashboard 
 # =========================================================
 def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     st.subheader("2) Trend Persistence Dashboard")
@@ -282,7 +282,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     ax2.set_ylabel("Signal Amplitude")
     ax2.legend(loc='upper left', fontsize=9)
 
-    # Sensitivity Table (kept as matplotlib table like your original)
+    # Sensitivity Table 
     table_ax = fig.add_axes([1.02, 0.35, 0.28, 0.3])
     table_ax.axis('off')
     table_ax.table(
