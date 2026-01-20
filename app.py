@@ -159,14 +159,30 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
     plt.legend(loc='upper left', fontsize=8, ncol=2)
     plt.grid(True, alpha=0.1)
 
-    # Table (Positioned relative to right margin)
+    # Bucket Table 
     dev = (regime_series - ref_mean).dropna()
     bucket = (np.round(dev / 0.5) * 0.5)
-    counts = bucket.value_counts().sort_index(ascending=False)
-    table_data = [[f"{k:+.1f}", int(v)] for k, v in counts[counts > 0].items()]
-    table = plt.table(cellText=table_data, colLabels=['$ Dev', 'Count'], loc='upper left', bbox=[1.02, 0.2, 0.25, 0.4])
+
+    counts = pd.Series(bucket).value_counts().sort_index(ascending=False)
+
+    half_width = 0.25  # because bucket size is 0.5, so +/- 0.25 around the center
+
+    table_data = []
+    for center, v in counts[counts > 0].items():
+        lo = center - half_width
+        hi = center + half_width
+        # Range label like: [+0.75, +1.25)
+        range_label = f"[{lo:+.2f}, {hi:+.2f})"
+        table_data.append([range_label, int(v)])
+
+    table = plt.table(
+        cellText=table_data,
+        colLabels=['$ Dev Range', 'Count'],
+        loc='upper left',
+        bbox=[1.02, 0.2, 0.3, 0.4]
+    )
     table.auto_set_font_size(False)
-    table.set_fontsize(7)
+    table.set_fontsize(7)   
 
     plt.tight_layout()
 
