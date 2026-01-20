@@ -189,46 +189,52 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
 # =========================================================
 # 2) Persistence Dashboard 
 # =========================================================
-def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
-    st.subheader("2) Trend Persistence Dashboard")
-
+def render_persistence_dashboard(lookback, fast_ma, slow_ma):
     # Filter Data
     latest_date = df_base['Timestamp'].max()
-    cutoff_date = latest_date - pd.DateOffset(years=int(lookback))
+    cutoff_date = latest_date - pd.DateOffset(years=lookback)
     df = df_base[df_base['Timestamp'] >= cutoff_date].copy()
-
+    
     # Calculate Spread (Close-to-Close)
     s = df['WTI_CLOSE'] - df['Brent_CLOSE']
     s.index = df['Timestamp']
     s = s.sort_index().dropna()
 
     # Signal Construction
-    if int(fast_ma) >= int(slow_ma):
-        st.error("Error: Fast MA must be smaller than Slow MA.")
+    if fast_ma >= slow_ma:
+        print("Error: Fast MA must be smaller than Slow MA.")
         return
 
-    ma_fast = s.rolling(int(fast_ma)).mean()
-    ma_slow = s.rolling(int(slow_ma)).mean()
+    ma_fast = s.rolling(fast_ma).mean()
+    ma_slow = s.rolling(slow_ma).mean()
     signal = ma_fast - ma_slow
 
     # Inflexion Detection
-    slope = ma_fast.diff(1)
+    slope = ma_fast.diff(5)
     turn = np.sign(slope).diff()
-
+    
     inflexions = []
     last_t = None
     for t in turn.index:
         if pd.isna(turn.loc[t]) or pd.isna(signal.loc[t]):
             continue
+
         if turn.loc[t] == -2:
             typ = "peak"
         elif turn.loc[t] == 2:
             typ = "trough"
         else:
             continue
-        # Noise filter: 10 day minimum between turns
-        if last_t is not None and (t - last_t).days < 10:
+
+        # Noise filter 1: 10 day minimum between turns
+        if last_t is not None and (t - last_t).days < 20:
             continue
+
+        # Noise filter 2: only keep "meaningful" turns
+        # (signal magnitude at the turn must be >= 0.2)
+        if abs(signal.loc[t]) < 0.2:
+            continue
+
         inflexions.append((t, typ))
         last_t = t
 
@@ -238,18 +244,23 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     for d_frac in decay_values:
         wane_days = []
         wane_diffs = []
+
         for t0, typ in inflexions:
             s0 = signal.loc[t0]
             if pd.isna(s0) or s0 == 0:
                 continue
+
             future = signal.loc[t0:].iloc[1:250]
             for d, (t, val) in enumerate(future.items(), start=1):
+                # "decay fraction" threshold: val <= d_frac * initial amplitude
                 if abs(val) <= d_frac * abs(s0):
                     wane_days.append(d)
                     wane_diffs.append(abs(s.loc[t] - s.loc[t0]))
                     break
+
+        # Display as "remaining %" = 100*(1 - d_frac)
         summary_rows.append([
-            f"{d_frac*100:.0f}%",
+            f"{(1 - d_frac)*100:.0f}%",
             np.round(np.mean(wane_days), 1) if wane_days else 0,
             np.round(np.mean(wane_diffs), 2) if wane_diffs else 0
         ])
@@ -263,9 +274,9 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
 
     # Top Panel: Price Context
     ax1.plot(s.index, s.values, label="Actual Spread", color='lightgray', alpha=0.5)
-    ax1.plot(ma_fast.index, ma_fast.values, label=f"Fast {int(fast_ma)}D", color='#2E86C1', lw=2)
-    ax1.plot(ma_slow.index, ma_slow.values, label=f"Slow {int(slow_ma)}D", color='#E67E22', lw=2)
-    ax1.set_title(f"Spread Trend Persistence Dashboard | {int(lookback)}Y History", fontsize=14)
+    ax1.plot(ma_fast.index, ma_fast.values, label=f"Fast {fast_ma}D", color='#2E86C1', lw=2)
+    ax1.plot(ma_slow.index, ma_slow.values, label=f"Slow {slow_ma}D", color='#E67E22', lw=2)
+    ax1.set_title(f"Spread Trend Persistence Dashboard | {lookback}Y History", fontsize=14)
     ax1.set_ylabel("Price ($/BBL)")
     ax1.legend(loc='upper left', fontsize=9)
 
@@ -275,25 +286,28 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
 
     peak_dates = [t for t, typ in inflexions if typ == 'peak']
     trough_dates = [t for t, typ in inflexions if typ == 'trough']
+
     if peak_dates:
         ax2.scatter(peak_dates, signal.loc[peak_dates], marker="v", color='red', s=50, label="Momentum Peak", zorder=5)
     if trough_dates:
         ax2.scatter(trough_dates, signal.loc[trough_dates], marker="^", color='blue', s=50, label="Momentum Trough", zorder=5)
+
     ax2.set_ylabel("Signal Amplitude")
     ax2.legend(loc='upper left', fontsize=9)
 
-    # Sensitivity Table 
+    # Sensitivity Table
     table_ax = fig.add_axes([1.02, 0.35, 0.28, 0.3])
     table_ax.axis('off')
     table_ax.table(
         cellText=summary_rows,
-        colLabels=['Decay %', 'Avg Days', 'Avg $ Move'],
+        colLabels=['Remaining %', 'Avg Days', 'Avg $ Move'],
         loc='center',
         cellLoc='center'
     )
     table_ax.set_title("Strategy Decay Sensitivity", fontsize=10, fontweight='bold')
 
     plt.tight_layout()
+    plt.show()
 
     # Streamlit display
     c1, c2, c3 = st.columns(3)
