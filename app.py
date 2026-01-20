@@ -319,7 +319,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
 
     # Sensitivity Table Positioning
     # Adjusted width (0.35) to accommodate the new SD column
-    table_ax = fig.add_axes([1.02, 0.35, 0.35, 0.3])
+    table_ax = fig.add_axes([1.05, 0.35, 0.35, 0.3])
     table_ax.axis('off')
     
     tbl = table_ax.table(
@@ -363,3 +363,4 @@ render_persistence_dashboard_streamlit(
     fast_ma=fast_ma,
     slow_ma=slow_ma
 )
+
