@@ -300,7 +300,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     table_ax.axis('off')
     table_ax.table(
         cellText=summary_rows,
-        colLabels=['Remaining %', 'Avg Days', 'Avg $ Move'],
+        colLabels=['Decay %', 'Avg Days', 'Avg $ Move'],
         loc='center',
         cellLoc='center'
     )
@@ -335,3 +335,4 @@ render_persistence_dashboard_streamlit(
     fast_ma=fast_ma,
     slow_ma=slow_ma
 )
+
