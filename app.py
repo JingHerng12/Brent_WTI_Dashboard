@@ -212,6 +212,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     df = df_base[df_base['Timestamp'] >= cutoff_date].copy()
     
     # Calculate Spread (Close-to-Close)
+    # Using WTI - Brent logic
     s = df['WTI_CLOSE'] - df['Brent_CLOSE']
     s.index = df['Timestamp']
     s = s.sort_index().dropna()
@@ -242,12 +243,11 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
         else:
             continue
 
-        # Noise filter 1: 10 day minimum between turns
+        # Noise filter 1: 20 day minimum between turns
         if last_t is not None and (t - last_t).days < 20:
             continue
 
-        # Noise filter 2: only keep "meaningful" turns
-        # (signal magnitude at the turn must be >= 0.2)
+        # Noise filter 2: Magnitude threshold
         if abs(signal.loc[t]) < 0.2:
             continue
 
@@ -266,19 +266,25 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
             if pd.isna(s0) or s0 == 0:
                 continue
 
+            # Look ahead up to 250 days
             future = signal.loc[t0:].iloc[1:250]
             for d, (t, val) in enumerate(future.items(), start=1):
-                # "decay fraction" threshold: val <= d_frac * initial amplitude
                 if abs(val) <= d_frac * abs(s0):
                     wane_days.append(d)
                     wane_diffs.append(abs(s.loc[t] - s.loc[t0]))
                     break
 
-        # Display as "remaining %" = 100*(1 - d_frac)
+        # Calculate Statistics including 1 Standard Deviation
+        avg_days = np.mean(wane_days) if wane_days else 0
+        std_days = np.std(wane_days) if wane_days else 0
+        avg_move = np.mean(wane_diffs) if wane_diffs else 0
+
+        # Build row for table
         summary_rows.append([
-            f"{(1 - d_frac)*100:.0f}%",
-            np.round(np.mean(wane_days), 1) if wane_days else 0,
-            np.round(np.mean(wane_diffs), 2) if wane_diffs else 0
+            f"{(1 - d_frac)*100:.0f}%",        # Retracement %
+            f"{avg_days:.1f}",                 # Mean
+            f"±{std_days:.1f}",                # 1 Standard Deviation
+            f"${avg_move:.2f}"                 # Dollar Move
         ])
 
     # --- Plotting ---
@@ -289,7 +295,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     )
 
     # Top Panel: Price Context
-    ax1.plot(s.index, s.values, label="Actual Spread", color='lightgray', alpha=0.5)
+    ax1.plot(s.index, s.values, label="Actual Spread (WTI-Brent)", color='lightgray', alpha=0.5)
     ax1.plot(ma_fast.index, ma_fast.values, label=f"Fast {fast_ma}D", color='#2E86C1', lw=2)
     ax1.plot(ma_slow.index, ma_slow.values, label=f"Slow {slow_ma}D", color='#E67E22', lw=2)
     ax1.set_title(f"Spread Trend Persistence Dashboard | {lookback}Y History", fontsize=14)
@@ -297,7 +303,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     ax1.legend(loc='upper left', fontsize=9)
 
     # Bottom Panel: Momentum Signal
-    ax2.plot(signal.index, signal.values, label="Momentum Signal (Fast - Slow)", color='#27AE60', lw=1.5)
+    ax2.plot(signal.index, signal.values, label="Momentum (Fast - Slow MA)", color='#27AE60', lw=1.5)
     ax2.axhline(0, color='black', lw=1, ls='--', alpha=0.5)
 
     peak_dates = [t for t, typ in inflexions if typ == 'peak']
@@ -311,16 +317,22 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     ax2.set_ylabel("Signal Amplitude")
     ax2.legend(loc='upper left', fontsize=9)
 
-    # Sensitivity Table
-    table_ax = fig.add_axes([1.02, 0.35, 0.28, 0.3])
+    # Sensitivity Table Positioning
+    # Adjusted width (0.35) to accommodate the new SD column
+    table_ax = fig.add_axes([1.02, 0.35, 0.35, 0.3])
     table_ax.axis('off')
-    table_ax.table(
+    
+    tbl = table_ax.table(
         cellText=summary_rows,
-        colLabels=['Retracement %', 'Avg Days', 'Avg $ Move'],
+        colLabels=['Retrace %', 'Avg Days', '1 SD (Days)', 'Avg $ Move'],
         loc='center',
         cellLoc='center'
     )
-    table_ax.set_title("Strategy Retracement Sensitivity", fontsize=10, fontweight='bold')
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(9)
+    tbl.scale(1.2, 1.5) # Scale for readability
+    
+    table_ax.set_title("Strategy Retracement Sensitivity", fontsize=11, fontweight='bold', pad=20)
 
     plt.tight_layout()
     plt.show()
