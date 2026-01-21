@@ -128,35 +128,25 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
     plt.axhline(ref_mean - 2*ref_std, color='#C0392B', lw=1.5, ls=':', alpha=0.7)
 
     # --- Annotations & Right Axis Labels ---
-    # 1. Increase right-side buffer to 30% to fit two columns of text
     curr_xlim = plt.xlim()
-    plt.xlim(curr_xlim[0], curr_xlim[1] + (curr_xlim[1] - curr_xlim[0]) * 0.30) 
-    
-    # 2. Define two distinct X-positions for labels
-    label_x_pos = plt.xlim()[1]  # Far right edge for Price Labels
-    stats_x_pos = current_date + pd.Timedelta(days=15) # Offset from the dot for the "NOW" box
+    plt.xlim(curr_xlim[0], curr_xlim[1] + (curr_xlim[1] - curr_xlim[0]) * 0.22)
+    text_x = plt.xlim()[1]
 
     # Scatter & Comprehensive "NOW" Annotation
     plt.scatter(current_date, current_val, color='blue', s=60, zorder=6)
-    
-    # Use 'left' alignment and a small box to separate it from background lines
     plt.annotate(f'Current Spread: {current_val:.2f} ({z_score:+.1f} SD)'
                  f'\nRange Freq: {persistence_pct:.1f}%'
-                 f'{ma_stats_text}', 
-                 xy=(current_date, current_val), 
-                 xytext=(stats_x_pos, current_val), 
-                 arrowprops=dict(arrowstyle='->', color='blue', lw=1.5, alpha=0.6),
-                 va='center', ha='left', fontsize=9, color='blue', fontweight='bold',
-                 bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1))
+                 f'{ma_stats_text}',
+                 xy=(current_date, current_val), xytext=(text_x, current_val),
+                 arrowprops=dict(arrowstyle='->', color='blue', lw=1.5),
+                 va='center', ha='right', fontsize=9, color='blue', fontweight='bold')
 
-    # GLOBAL SD LABELS (RIGHT SIDE) - Fixed to the far right edge
-    label_style = {'ha': 'right', 'fontsize': 8, 'alpha': 0.8}
-    
-    plt.text(label_x_pos, ref_mean, f' Mean: {ref_mean:.2f}', va='bottom', **label_style)
-    plt.text(label_x_pos, ref_mean + ref_std, f' +1SD: {ref_mean + ref_std:.2f}', va='bottom', color='gray', **label_style)
-    plt.text(label_x_pos, ref_mean - ref_std, f' -1SD: {ref_mean - ref_std:.2f}', va='top', color='gray', **label_style)
-    plt.text(label_x_pos, ref_mean + 2 * ref_std, f' +2SD: {ref_mean + 2*ref_std:.2f}', va='bottom', color='#C0392B', fontweight='bold', **label_style)
-    plt.text(label_x_pos, ref_mean - 2 * ref_std, f' -2SD: {ref_mean - 2*ref_std:.2f}', va='top', color='#C0392B', fontweight='bold', **label_style)
+    # GLOBAL SD LABELS (RIGHT SIDE)
+    plt.text(text_x, ref_mean, f' Mean: {ref_mean:.2f}', va='bottom', ha='right', fontsize=8, alpha=0.7)
+    plt.text(text_x, ref_mean + ref_std, f' +1SD: {ref_mean + ref_std:.2f}', va='bottom', ha='right', fontsize=7, color='gray')
+    plt.text(text_x, ref_mean - ref_std, f' -1SD: {ref_mean - ref_std:.2f}', va='top', ha='right', fontsize=7, color='gray')
+    plt.text(text_x, ref_mean + 2 * ref_std, f' +2SD: {ref_mean + 2*ref_std:.2f}', va='bottom', ha='right', fontsize=7, color='#C0392B', fontweight='bold')
+    plt.text(text_x, ref_mean - 2 * ref_std, f' -2SD: {ref_mean - 2*ref_std:.2f}', va='top', ha='right', fontsize=7, color='#C0392B', fontweight='bold')
 
     # Status Bar
     plt.text(0.5, 0.98, f"SMA Trend: [Weekly: {trend_w}] | [Monthly: {trend_m}]",
@@ -238,26 +228,19 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     # Inflexion Detection logic
     slope = ma_fast.diff(5)
     turn = np.sign(slope).diff()
-    
     inflexions = []
     last_t = None
     for t in turn.index:
-        if pd.isna(turn.loc[t]) or pd.isna(signal.loc[t]):
-            continue
-        if turn.loc[t] == -2:
-            typ = "peak"
-        elif turn.loc[t] == 2:
-            typ = "trough"
-        else:
-            continue
-        if last_t is not None and (t - last_t).days < 20:
-            continue
-        if abs(signal.loc[t]) < 0.2:
-            continue
+        if pd.isna(turn.loc[t]) or pd.isna(signal.loc[t]): continue
+        if turn.loc[t] == -2: typ = "peak"
+        elif turn.loc[t] == 2: typ = "trough"
+        else: continue
+        if last_t is not None and (t - last_t).days < 20: continue
+        if abs(signal.loc[t]) < 0.2: continue
         inflexions.append((t, typ))
         last_t = t
 
-    # --- Sensitivity Analysis Logic ---
+    # --- Sensitivity Analysis Logic (Global Stats) ---
     decay_values = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
     summary_rows = []
     for d_frac in decay_values:
@@ -276,59 +259,54 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
         avg_move = np.mean(wane_diffs) if wane_diffs else 0
         summary_rows.append([f"{(1 - d_frac)*100:.0f}%", f"{avg_days:.1f}", f"±{std_days:.1f}", f"${avg_move:.2f}"])
 
-    # --- Plotting ---
+    # --- Plotting Setup ---
     plt.close('all')
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
 
-    # Top Panel: Price Context
-    ax1.plot(s.index, s.values, label="Actual Spread (WTI-Brent)", color='lightgray', alpha=0.5)
+    ax1.plot(s.index, s.values, label="Actual Spread", color='lightgray', alpha=0.5)
     ax1.plot(ma_fast.index, ma_fast.values, label=f"Fast {fast_ma}D", color='#2E86C1', lw=2)
     ax1.plot(ma_slow.index, ma_slow.values, label=f"Slow {slow_ma}D", color='#E67E22', lw=2)
-    ax1.set_title(f"Spread Trend Persistence Dashboard | {lookback}Y History", fontsize=14)
-    ax1.set_ylabel("Price ($/BBL)")
-    ax1.legend(loc='upper left', fontsize=9)
-
-    # Bottom Panel: Momentum Signal
-    ax2.plot(signal.index, signal.values, label="Momentum (Fast - Slow MA)", color='#27AE60', lw=1.5)
+    ax2.plot(signal.index, signal.values, label="Momentum Signal", color='#27AE60', lw=1.5)
     ax2.axhline(0, color='black', lw=1, ls='--', alpha=0.5)
-    
-    peak_dates = [t for t, typ in inflexions if typ == 'peak']
-    trough_dates = [t for t, typ in inflexions if typ == 'trough']
-    if peak_dates: ax2.scatter(peak_dates, signal.loc[peak_dates], marker="v", color='red', s=50, label="Peak")
-    if trough_dates: ax2.scatter(trough_dates, signal.loc[trough_dates], marker="^", color='blue', s=50, label="Trough")
 
-    # --- Right Side: INFO TABLES ---
-    
-    # 1. Latest Inflexion Table (Placed at top of sidebar)
+    # --- INFO TABLES ---
     if inflexions:
         t_lat, typ_lat = inflexions[-1]
+        s0_lat = signal.loc[t_lat]
+        
+        # Base Data for Latest Inflexion
         inflex_data = [
             ["Type", typ_lat.upper()],
             ["Date", t_lat.strftime('%Y-%m-%d')],
-            ["Spread Price", f"${s.loc[t_lat]:.2f}"]
+            ["Start Price", f"${s.loc[t_lat]:.2f}"]
         ]
-        inflex_ax = fig.add_axes([1.05, 0.70, 0.35, 0.15]) # Positioned ABOVE the sensitivity table
-        inflex_ax.axis('off')
-        inflex_ax.set_title("LATEST INFLEXION INFO", fontsize=11, fontweight='bold', color='darkred' if typ_lat == 'peak' else 'darkblue')
         
-        t1 = inflex_ax.table(cellText=inflex_data, loc='center', cellLoc='left')
-        t1.auto_set_font_size(False)
-        t1.set_fontsize(10)
-        t1.scale(1.2, 1.8)
+        # Calculate specific retrace prices for THIS signal
+        target_levels = [0.70, 0.50, 0.30, 0.10] # These represent 30%, 50%, 70%, 90% retrace
+        future_lat = signal.loc[t_lat:].iloc[1:]
+        
+        for lvl in target_levels:
+            retrace_pct = int((1 - lvl) * 100)
+            hit_price = "Pending"
+            for t_f, val_f in future_lat.items():
+                if abs(val_f) <= lvl * abs(s0_lat):
+                    hit_price = f"${s.loc[t_f]:.2f}"
+                    break
+            inflex_data.append([f"{retrace_pct}% Price", hit_price])
 
-    # 2. Strategy Retracement Sensitivity Table (Placed below latest info)
-    table_ax = fig.add_axes([1.05, 0.30, 0.35, 0.3])
+        # Render Table 1: Latest Info
+        inflex_ax = fig.add_axes([1.05, 0.60, 0.35, 0.25]) 
+        inflex_ax.axis('off')
+        inflex_ax.set_title("LATEST SIGNAL & RETRACE PRICES", fontsize=11, fontweight='bold', color='darkred' if typ_lat == 'peak' else 'darkblue')
+        t1 = inflex_ax.table(cellText=inflex_data, loc='center', cellLoc='left')
+        t1.auto_set_font_size(False); t1.set_fontsize(9); t1.scale(1.2, 1.8)
+
+    # Render Table 2: Historical Sensitivity
+    table_ax = fig.add_axes([1.05, 0.15, 0.35, 0.35])
     table_ax.axis('off')
-    table_ax.set_title("Strategy Retracement Sensitivity", fontsize=11, fontweight='bold', pad=20)
-    
-    tbl = table_ax.table(
-        cellText=summary_rows,
-        colLabels=['Retrace %', 'Avg Days', '1 SD (Days)', 'Avg $ Move'],
-        loc='center', cellLoc='center'
-    )
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(9)
-    tbl.scale(1.2, 1.5)
+    table_ax.set_title("Historical Retrace Sensitivity", fontsize=11, fontweight='bold', pad=20)
+    tbl = table_ax.table(cellText=summary_rows, colLabels=['Retrace %', 'Avg Days', '1 SD', 'Avg $ Move'], loc='center', cellLoc='center')
+    tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1.2, 1.5)
 
     plt.show()
 
@@ -358,8 +336,3 @@ render_persistence_dashboard_streamlit(
     fast_ma=fast_ma,
     slow_ma=slow_ma
 )
-
-
-
-
-
