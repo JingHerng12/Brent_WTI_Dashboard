@@ -258,7 +258,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
         last_t = t
 
     # --- Sensitivity Analysis Logic ---
-    decay_values = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
+    decay_values = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
     summary_rows = []
     for d_frac in decay_values:
         wane_days, wane_diffs = [], []
@@ -358,4 +358,5 @@ render_persistence_dashboard_streamlit(
     fast_ma=fast_ma,
     slow_ma=slow_ma
 )
+
 
