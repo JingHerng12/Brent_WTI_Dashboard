@@ -212,7 +212,6 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     df = df_base[df_base['Timestamp'] >= cutoff_date].copy()
     
     # Calculate Spread (Close-to-Close)
-    # Using WTI - Brent logic
     s = df['WTI_CLOSE'] - df['Brent_CLOSE']
     s.index = df['Timestamp']
     s = s.sort_index().dropna()
@@ -226,7 +225,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     ma_slow = s.rolling(slow_ma).mean()
     signal = ma_fast - ma_slow
 
-    # Inflexion Detection
+    # Inflexion Detection logic
     slope = ma_fast.diff(5)
     turn = np.sign(slope).diff()
     
@@ -235,64 +234,41 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     for t in turn.index:
         if pd.isna(turn.loc[t]) or pd.isna(signal.loc[t]):
             continue
-
         if turn.loc[t] == -2:
             typ = "peak"
         elif turn.loc[t] == 2:
             typ = "trough"
         else:
             continue
-
-        # Noise filter 1: 20 day minimum between turns
         if last_t is not None and (t - last_t).days < 20:
             continue
-
-        # Noise filter 2: Magnitude threshold
         if abs(signal.loc[t]) < 0.2:
             continue
-
         inflexions.append((t, typ))
         last_t = t
 
-    # Sensitivity Analysis Logic
+    # --- Sensitivity Analysis Logic ---
     decay_values = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
     summary_rows = []
     for d_frac in decay_values:
-        wane_days = []
-        wane_diffs = []
-
+        wane_days, wane_diffs = [], []
         for t0, typ in inflexions:
             s0 = signal.loc[t0]
-            if pd.isna(s0) or s0 == 0:
-                continue
-
-            # Look ahead up to 250 days
+            if pd.isna(s0) or s0 == 0: continue
             future = signal.loc[t0:].iloc[1:250]
             for d, (t, val) in enumerate(future.items(), start=1):
                 if abs(val) <= d_frac * abs(s0):
                     wane_days.append(d)
                     wane_diffs.append(abs(s.loc[t] - s.loc[t0]))
                     break
-
-        # Calculate Statistics including 1 Standard Deviation
         avg_days = np.mean(wane_days) if wane_days else 0
         std_days = np.std(wane_days) if wane_days else 0
         avg_move = np.mean(wane_diffs) if wane_diffs else 0
-
-        # Build row for table
-        summary_rows.append([
-            f"{(1 - d_frac)*100:.0f}%",        # Retracement %
-            f"{avg_days:.1f}",                 # Mean
-            f"±{std_days:.1f}",                # 1 Standard Deviation
-            f"${avg_move:.2f}"                 # Dollar Move
-        ])
+        summary_rows.append([f"{(1 - d_frac)*100:.0f}%", f"{avg_days:.1f}", f"±{std_days:.1f}", f"${avg_move:.2f}"])
 
     # --- Plotting ---
     plt.close('all')
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(13, 8), sharex=True,
-        gridspec_kw={'height_ratios': [2, 1]}
-    )
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
 
     # Top Panel: Price Context
     ax1.plot(s.index, s.values, label="Actual Spread (WTI-Brent)", color='lightgray', alpha=0.5)
@@ -305,36 +281,45 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     # Bottom Panel: Momentum Signal
     ax2.plot(signal.index, signal.values, label="Momentum (Fast - Slow MA)", color='#27AE60', lw=1.5)
     ax2.axhline(0, color='black', lw=1, ls='--', alpha=0.5)
-
+    
     peak_dates = [t for t, typ in inflexions if typ == 'peak']
     trough_dates = [t for t, typ in inflexions if typ == 'trough']
+    if peak_dates: ax2.scatter(peak_dates, signal.loc[peak_dates], marker="v", color='red', s=50, label="Peak")
+    if trough_dates: ax2.scatter(trough_dates, signal.loc[trough_dates], marker="^", color='blue', s=50, label="Trough")
 
-    if peak_dates:
-        ax2.scatter(peak_dates, signal.loc[peak_dates], marker="v", color='red', s=50, label="Momentum Peak", zorder=5)
-    if trough_dates:
-        ax2.scatter(trough_dates, signal.loc[trough_dates], marker="^", color='blue', s=50, label="Momentum Trough", zorder=5)
+    # --- Right Side: INFO TABLES ---
+    
+    # 1. Latest Inflexion Table (Placed at top of sidebar)
+    if inflexions:
+        t_lat, typ_lat = inflexions[-1]
+        inflex_data = [
+            ["Type", typ_lat.upper()],
+            ["Date", t_lat.strftime('%Y-%m-%d')],
+            ["Spread Price", f"${s.loc[t_lat]:.2f}"]
+        ]
+        inflex_ax = fig.add_axes([1.05, 0.70, 0.35, 0.15]) # Positioned ABOVE the sensitivity table
+        inflex_ax.axis('off')
+        inflex_ax.set_title("LATEST INFLEXION INFO", fontsize=11, fontweight='bold', color='darkred' if typ_lat == 'peak' else 'darkblue')
+        
+        t1 = inflex_ax.table(cellText=inflex_data, loc='center', cellLoc='left')
+        t1.auto_set_font_size(False)
+        t1.set_fontsize(10)
+        t1.scale(1.2, 1.8)
 
-    ax2.set_ylabel("Signal Amplitude")
-    ax2.legend(loc='upper left', fontsize=9)
-
-    # Sensitivity Table Positioning
-    # Adjusted width (0.35) to accommodate the new SD column
-    table_ax = fig.add_axes([1.05, 0.35, 0.35, 0.3])
+    # 2. Strategy Retracement Sensitivity Table (Placed below latest info)
+    table_ax = fig.add_axes([1.05, 0.30, 0.35, 0.3])
     table_ax.axis('off')
+    table_ax.set_title("Strategy Retracement Sensitivity", fontsize=11, fontweight='bold', pad=20)
     
     tbl = table_ax.table(
         cellText=summary_rows,
         colLabels=['Retrace %', 'Avg Days', '1 SD (Days)', 'Avg $ Move'],
-        loc='center',
-        cellLoc='center'
+        loc='center', cellLoc='center'
     )
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(9)
-    tbl.scale(1.2, 1.5) # Scale for readability
-    
-    table_ax.set_title("Strategy Retracement Sensitivity", fontsize=11, fontweight='bold', pad=20)
+    tbl.scale(1.2, 1.5)
 
-    plt.tight_layout()
     plt.show()
 
     # Streamlit display
@@ -363,4 +348,3 @@ render_persistence_dashboard_streamlit(
     fast_ma=fast_ma,
     slow_ma=slow_ma
 )
-
