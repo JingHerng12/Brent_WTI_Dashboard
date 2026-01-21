@@ -282,17 +282,21 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
         ]
         
         # Calculate specific retrace prices for THIS signal
-        target_levels = [0.70, 0.50, 0.30, 0.10] # These represent 30%, 50%, 70%, 90% retrace
+        target_levels = [0.70, 0.50, 0.30, 0.10] # 30%, 50%, 70%, 90%
         future_lat = signal.loc[t_lat:].iloc[1:]
         
         for lvl in target_levels:
             retrace_pct = int((1 - lvl) * 100)
-            hit_price = "Pending"
+            target_display = "Pending" # Default if not hit yet
+            
             for t_f, val_f in future_lat.items():
                 if abs(val_f) <= lvl * abs(s0_lat):
-                    hit_price = f"${s.loc[t_f]:.2f}"
+                    # Found the retrace point! 
+                    # Format as: $Price (YYYY-MM-DD)
+                    target_display = f"${s.loc[t_f]:.2f} ({t_f.strftime('%Y-%m-%d')})"
                     break
-            inflex_data.append([f"{retrace_pct}% Price", hit_price])
+            
+            inflex_data.append([f"{retrace_pct}% Level", target_display])
 
         # Render Table 1: Latest Info
         inflex_ax = fig.add_axes([1.05, 0.60, 0.35, 0.25]) 
