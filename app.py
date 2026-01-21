@@ -309,7 +309,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
         ]
         inflex_ax = fig.add_axes([1.05, 0.70, 0.35, 0.15]) # Positioned ABOVE the sensitivity table
         inflex_ax.axis('off')
-        inflex_ax.set_title("LATEST INFLECTION INFO", fontsize=11, fontweight='bold', color='darkred' if typ_lat == 'peak' else 'darkblue')
+        inflex_ax.set_title("LATEST INFLEXION INFO", fontsize=11, fontweight='bold', color='darkred' if typ_lat == 'peak' else 'darkblue')
         
         t1 = inflex_ax.table(cellText=inflex_data, loc='center', cellLoc='left')
         t1.auto_set_font_size(False)
@@ -358,6 +358,7 @@ render_persistence_dashboard_streamlit(
     fast_ma=fast_ma,
     slow_ma=slow_ma
 )
+
 
 
 
