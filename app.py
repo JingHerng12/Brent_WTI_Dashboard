@@ -241,6 +241,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
         last_t = t
 
     # --- Sensitivity Analysis Logic (Global Stats) ---
+    # This populates the summary_rows variable to fix the NameError
     decay_values = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
     summary_rows = []
     for d_frac in decay_values:
@@ -263,11 +264,28 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     plt.close('all')
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
 
-    ax1.plot(s.index, s.values, label="Actual Spread", color='lightgray', alpha=0.5)
-    ax1.plot(ma_fast.index, ma_fast.values, label=f"Fast {fast_ma}D", color='#2E86C1', lw=2)
-    ax1.plot(ma_slow.index, ma_slow.values, label=f"Slow {slow_ma}D", color='#E67E22', lw=2)
+    # Top Panel: Price + MAs + Legend
+    ax1.plot(s.index, s.values, label="Actual Spread", color='lightgray', alpha=0.5, zorder=1)
+    ax1.plot(ma_fast.index, ma_fast.values, label=f"Fast {fast_ma}D", color='#2E86C1', lw=2, zorder=3)
+    ax1.plot(ma_slow.index, ma_slow.values, label=f"Slow {slow_ma}D", color='#E67E22', lw=2, zorder=2)
+    ax1.set_title(f"Spread Trend Persistence Dashboard | {lookback}Y History", fontsize=14)
+    ax1.set_ylabel("Price ($/BBL)")
+    ax1.legend(loc='upper left', fontsize=9, frameon=True)
+
+    # Bottom Panel: Momentum Signal + Triangles
     ax2.plot(signal.index, signal.values, label="Momentum Signal", color='#27AE60', lw=1.5)
     ax2.axhline(0, color='black', lw=1, ls='--', alpha=0.5)
+    
+    peak_dates = [t for t, typ in inflexions if typ == 'peak']
+    trough_dates = [t for t, typ in inflexions if typ == 'trough']
+    
+    if peak_dates: 
+        ax2.scatter(peak_dates, signal.loc[peak_dates], marker="v", color='red', s=100, label="Peak", zorder=5)
+    if trough_dates: 
+        ax2.scatter(trough_dates, signal.loc[trough_dates], marker="^", color='blue', s=100, label="Trough", zorder=5)
+    
+    ax2.set_ylabel("Signal Amplitude")
+    ax2.legend(loc='upper left', fontsize=9)
 
     # --- INFO TABLES ---
     if inflexions:
@@ -287,26 +305,22 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
         
         for lvl in target_levels:
             retrace_pct = int((1 - lvl) * 100)
-            target_display = "Pending" # Default if not hit yet
-            
+            target_display = "Pending"
             for t_f, val_f in future_lat.items():
                 if abs(val_f) <= lvl * abs(s0_lat):
-                    # Found the retrace point! 
-                    # Format as: $Price (YYYY-MM-DD)
                     target_display = f"${s.loc[t_f]:.2f} ({t_f.strftime('%Y-%m-%d')})"
                     break
-            
             inflex_data.append([f"{retrace_pct}% Level", target_display])
 
         # Render Table 1: Latest Info
-        inflex_ax = fig.add_axes([1.05, 0.60, 0.35, 0.25]) 
+        inflex_ax = fig.add_axes([1.02, 0.60, 0.40, 0.25]) 
         inflex_ax.axis('off')
         inflex_ax.set_title("LATEST SIGNAL & RETRACE PRICES", fontsize=11, fontweight='bold', color='darkred' if typ_lat == 'peak' else 'darkblue')
         t1 = inflex_ax.table(cellText=inflex_data, loc='center', cellLoc='left')
         t1.auto_set_font_size(False); t1.set_fontsize(9); t1.scale(1.2, 1.8)
 
     # Render Table 2: Historical Sensitivity
-    table_ax = fig.add_axes([1.05, 0.15, 0.35, 0.35])
+    table_ax = fig.add_axes([1.02, 0.15, 0.40, 0.35])
     table_ax.axis('off')
     table_ax.set_title("Historical Retrace Sensitivity", fontsize=11, fontweight='bold', pad=20)
     tbl = table_ax.table(cellText=summary_rows, colLabels=['Retrace %', 'Avg Days', '1 SD', 'Avg $ Move'], loc='center', cellLoc='center')
