@@ -128,25 +128,35 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
     plt.axhline(ref_mean - 2*ref_std, color='#C0392B', lw=1.5, ls=':', alpha=0.7)
 
     # --- Annotations & Right Axis Labels ---
+    # 1. Increase right-side buffer to 30% to fit two columns of text
     curr_xlim = plt.xlim()
-    plt.xlim(curr_xlim[0], curr_xlim[1] + (curr_xlim[1] - curr_xlim[0]) * 0.22)
-    text_x = plt.xlim()[1]
+    plt.xlim(curr_xlim[0], curr_xlim[1] + (curr_xlim[1] - curr_xlim[0]) * 0.30) 
+    
+    # 2. Define two distinct X-positions for labels
+    label_x_pos = plt.xlim()[1]  # Far right edge for Price Labels
+    stats_x_pos = current_date + pd.Timedelta(days=15) # Offset from the dot for the "NOW" box
 
     # Scatter & Comprehensive "NOW" Annotation
     plt.scatter(current_date, current_val, color='blue', s=60, zorder=6)
+    
+    # Use 'left' alignment and a small box to separate it from background lines
     plt.annotate(f'Current Spread: {current_val:.2f} ({z_score:+.1f} SD)'
                  f'\nRange Freq: {persistence_pct:.1f}%'
-                 f'{ma_stats_text}',
-                 xy=(current_date, current_val), xytext=(text_x, current_val),
-                 arrowprops=dict(arrowstyle='->', color='blue', lw=1.5),
-                 va='center', ha='right', fontsize=9, color='blue', fontweight='bold')
+                 f'{ma_stats_text}', 
+                 xy=(current_date, current_val), 
+                 xytext=(stats_x_pos, current_val), 
+                 arrowprops=dict(arrowstyle='->', color='blue', lw=1.5, alpha=0.6),
+                 va='center', ha='left', fontsize=9, color='blue', fontweight='bold',
+                 bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1))
 
-    # GLOBAL SD LABELS (RIGHT SIDE)
-    plt.text(text_x, ref_mean, f' Mean: {ref_mean:.2f}', va='bottom', ha='right', fontsize=8, alpha=0.7)
-    plt.text(text_x, ref_mean + ref_std, f' +1SD: {ref_mean + ref_std:.2f}', va='bottom', ha='right', fontsize=7, color='gray')
-    plt.text(text_x, ref_mean - ref_std, f' -1SD: {ref_mean - ref_std:.2f}', va='top', ha='right', fontsize=7, color='gray')
-    plt.text(text_x, ref_mean + 2 * ref_std, f' +2SD: {ref_mean + 2*ref_std:.2f}', va='bottom', ha='right', fontsize=7, color='#C0392B', fontweight='bold')
-    plt.text(text_x, ref_mean - 2 * ref_std, f' -2SD: {ref_mean - 2*ref_std:.2f}', va='top', ha='right', fontsize=7, color='#C0392B', fontweight='bold')
+    # GLOBAL SD LABELS (RIGHT SIDE) - Fixed to the far right edge
+    label_style = {'ha': 'right', 'fontsize': 8, 'alpha': 0.8}
+    
+    plt.text(label_x_pos, ref_mean, f' Mean: {ref_mean:.2f}', va='bottom', **label_style)
+    plt.text(label_x_pos, ref_mean + ref_std, f' +1SD: {ref_mean + ref_std:.2f}', va='bottom', color='gray', **label_style)
+    plt.text(label_x_pos, ref_mean - ref_std, f' -1SD: {ref_mean - ref_std:.2f}', va='top', color='gray', **label_style)
+    plt.text(label_x_pos, ref_mean + 2 * ref_std, f' +2SD: {ref_mean + 2*ref_std:.2f}', va='bottom', color='#C0392B', fontweight='bold', **label_style)
+    plt.text(label_x_pos, ref_mean - 2 * ref_std, f' -2SD: {ref_mean - 2*ref_std:.2f}', va='top', color='#C0392B', fontweight='bold', **label_style)
 
     # Status Bar
     plt.text(0.5, 0.98, f"SMA Trend: [Weekly: {trend_w}] | [Monthly: {trend_m}]",
