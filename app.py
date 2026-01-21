@@ -322,7 +322,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     # Render Table 2: Historical Sensitivity
     table_ax = fig.add_axes([1.02, 0.15, 0.40, 0.35])
     table_ax.axis('off')
-    table_ax.set_title("Historical Retrace Sensitivity", fontsize=11, fontweight='bold', pad=20)
+    table_ax.set_title("Signal Retrace Sensitivity", fontsize=11, fontweight='bold', pad=20)
     tbl = table_ax.table(cellText=summary_rows, colLabels=['Retrace %', 'Avg Days', '1 SD', 'Avg $ Move'], loc='center', cellLoc='center')
     tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1.2, 1.5)
 
@@ -354,3 +354,4 @@ render_persistence_dashboard_streamlit(
     fast_ma=fast_ma,
     slow_ma=slow_ma
 )
+
