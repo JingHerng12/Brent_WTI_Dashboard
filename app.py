@@ -10,25 +10,28 @@ st.set_page_config(page_title="Brent–WTI Dashboards", layout="wide")
 st.title("Brent–WTI Dashboards")
 
 # -----------------------------
-# Load Data  
+# Load Data
 # -----------------------------
 @st.cache_data
 def load_data(path: str) -> pd.DataFrame:
     df_base = pd.read_excel(path)
-    columns = ['Timestamp', 'Brent_OPEN', 'Brent_HIGH', 'Brent_LOW', 'Brent_CLOSE',
-               'WTI_OPEN', 'WTI_HIGH', 'WTI_LOW', 'WTI_CLOSE']
+    columns = [
+        "Timestamp",
+        "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE",
+        "WTI_OPEN", "WTI_HIGH", "WTI_LOW", "WTI_CLOSE",
+    ]
     df_base.columns = columns
-    df_base['Timestamp'] = pd.to_datetime(df_base['Timestamp'])
-    df_base = df_base.sort_values('Timestamp').reset_index(drop=True)
+    df_base["Timestamp"] = pd.to_datetime(df_base["Timestamp"])
+    df_base = df_base.sort_values("Timestamp").reset_index(drop=True)
     return df_base
 
 DATA_PATH = "Brent_WTI_long_data_tidy.xlsx"
 df_base = load_data(DATA_PATH)
 
 # =========================================================
-# Sidebar controls 
+# Sidebar controls
 # =========================================================
-st.sidebar.header("Spread Dashboard Controls")
+st.sidebar.header("1) Spread Dashboard Controls")
 lookback = st.sidebar.number_input("Lookback (Y)", min_value=1, max_value=30, value=3, step=1)
 ma_window = st.sidebar.number_input("MA Window (D)", min_value=5, max_value=400, value=50, step=5)
 
@@ -45,50 +48,74 @@ show_ma = st.sidebar.checkbox("Show MA", value=True)
 show_ma_sd = st.sidebar.checkbox("Show MA Bands", value=True)
 
 st.sidebar.divider()
-st.sidebar.header("Persistence Dashboard Controls")
+st.sidebar.header("2) MA Retracement Dashboard Controls")
+mr_lookback = st.sidebar.number_input("MA Retracement Lookback (Y)", min_value=1, max_value=30, value=3, step=1)
+
+mr_ma_window = st.sidebar.number_input(
+    "MA Window for Retracement (D)",
+    min_value=5, max_value=400, value=int(ma_window), step=5
+)
+
+st.sidebar.divider()
+st.sidebar.header("3) Persistence Dashboard Controls")
 p_lookback = st.sidebar.number_input("Persistence Lookback (Y)", min_value=1, max_value=30, value=3, step=1)
 fast_ma = st.sidebar.number_input("Fast MA Window", min_value=2, max_value=300, value=20, step=1)
 slow_ma = st.sidebar.number_input("Slow MA Window", min_value=5, max_value=600, value=50, step=1)
+
+# --- Fixed params for MA Retracement Dashboard (not in sidebar) ---
+MR_TURN_LOOKBACK = 5
+MR_MIN_GAP_DAYS = 10    
+MR_RETRACE_LEVELS = [0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]
+
+def build_spread_series(df: pd.DataFrame, spread_key: str) -> pd.Series:
+    ts = pd.to_datetime(df["Timestamp"])
+    s = df[spread_key].copy()
+    s.index = ts
+    return s.sort_index()
 
 # =========================================================
 # 1) Spread Dashboard
 # =========================================================
 def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd):
-    # Filter Data
-    latest_date = df_base['Timestamp'].max()
+    import matplotlib.transforms as mtransforms
+
+    latest_date = df_base["Timestamp"].max()
     cutoff_date = latest_date - pd.DateOffset(years=int(lookback))
-    df = df_base[df_base['Timestamp'] >= cutoff_date].copy()
+    df = df_base[df_base["Timestamp"] >= cutoff_date].copy()
 
     # Calculate Spreads
-    df['spread_close'] = df['WTI_CLOSE'] - df['Brent_CLOSE']
-    df['spread_high'] = df['WTI_HIGH'] - df['Brent_HIGH']
-    df['spread_WTI_low_Brent_high'] = df['WTI_LOW'] - df['Brent_HIGH']
-    df['spread_WTI_high_Brent_low'] = df['WTI_HIGH'] - df['Brent_LOW']
+    df["spread_close"] = df["WTI_CLOSE"] - df["Brent_CLOSE"]
+    df["spread_high"] = df["WTI_HIGH"] - df["Brent_HIGH"]
+    df["spread_WTI_low_Brent_high"] = df["WTI_LOW"] - df["Brent_HIGH"]
+    df["spread_WTI_high_Brent_low"] = df["WTI_HIGH"] - df["Brent_LOW"]
 
     labels_map = {
-        'spread_close': ('Close-to-Close', '#2E86C1'),
-        'spread_high': ('High-to-High', '#27AE60'),
-        'spread_WTI_low_Brent_high': ('Floor (WTI Low - Brent High)', '#E74C3C'),
-        'spread_WTI_high_Brent_low': ('Ceiling (WTI High - Brent Low)', '#8E44AD')
+        "spread_close": ("Close-to-Close", "#2E86C1"),
+        "spread_high": ("High-to-High", "#27AE60"),
+        "spread_WTI_low_Brent_high": ("Floor (WTI Low - Brent High)", "#E74C3C"),
+        "spread_WTI_high_Brent_low": ("Ceiling (WTI High - Brent Low)", "#8E44AD"),
     }
     label, color = labels_map[visual_choice]
-    regime_series = df[visual_choice]
 
-    # --- Setup Figure ---
-    plt.close('all')
+    s = build_spread_series(df, visual_choice)
+
+    plt.close("all")
     fig = plt.figure(figsize=(15, 8))
+    ax = plt.gca()
 
-    # Plot main series
-    plt.plot(df['Timestamp'], regime_series, label=label, color=color, lw=1.8, alpha=0.9, zorder=4)
+    ax.plot(s.index, s.values, label=label, color=color, lw=1.8, alpha=0.9, zorder=4)
 
-    # --- Trend Logic & Moving Average ---
     trend_w, trend_m = "N/A", "N/A"
     ma_stats_text = ""
 
     if show_ma:
-        safe_window = min(int(ma_window), len(regime_series))
-        ma_line = regime_series.rolling(window=safe_window).mean()
-        plt.plot(df['Timestamp'], ma_line, label=f'{safe_window}D MA', color='black', lw=1.2, alpha=0.8, zorder=3)
+        safe_window = max(2, min(int(ma_window), len(s)))
+        ma_line = s.rolling(window=safe_window).mean()
+        ax.plot(
+            ma_line.index, ma_line.values,
+            label=f"{safe_window}D MA", color="black",
+            lw=1.2, alpha=0.8, zorder=3
+        )
 
         curr_sma = ma_line.iloc[-1]
         week_sma = ma_line.iloc[-6] if len(ma_line) > 6 else np.nan
@@ -97,131 +124,342 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
         trend_m = "UP" if curr_sma > month_sma else "DOWN"
 
         if show_ma_sd:
-            ma_sd = regime_series.rolling(window=safe_window).std()
-            u1, u2 = ma_line + ma_sd, ma_line + 2*ma_sd
-            l1, l2 = ma_line - ma_sd, ma_line - 2*ma_sd
+            ma_sd = s.rolling(window=safe_window).std()
+            u1, u2 = ma_line + ma_sd, ma_line + 2 * ma_sd
+            l1, l2 = ma_line - ma_sd, ma_line - 2 * ma_sd
+            ma_stats_text = (
+                f"\nMA ±1SD: {l1.iloc[-1]:.2f} / {u1.iloc[-1]:.2f}"
+                f"\nMA ±2SD: {l2.iloc[-1]:.2f} / {u2.iloc[-1]:.2f}"
+            )
+            ax.fill_between(s.index, l1.values, u1.values, color="#1ABC9C", alpha=0.15, label="MA ±1SD", zorder=2)
+            ax.fill_between(s.index, l2.values, l1.values, color="#9B59B6", alpha=0.10, label="MA ±2SD", zorder=1)
+            ax.fill_between(s.index, u1.values, u2.values, color="#9B59B6", alpha=0.10, zorder=1)
 
-            # Prepare text for the "NOW" annotation
-            ma_stats_text = (f"\nMA ±1SD: {l1.iloc[-1]:.2f} / {u1.iloc[-1]:.2f}"
-                             f"\nMA ±2SD: {l2.iloc[-1]:.2f} / {u2.iloc[-1]:.2f}")
+    # Global mean & SD lines
+    ref_mean, ref_std = float(s.mean()), float(s.std())
 
-            plt.fill_between(df['Timestamp'], l1, u1, color='#1ABC9C', alpha=0.15, label='MA ±1SD', zorder=2)
-            plt.fill_between(df['Timestamp'], l2, l1, color='#9B59B6', alpha=0.1, label='MA ±2SD', zorder=1)
-            plt.fill_between(df['Timestamp'], u1, u2, color='#9B59B6', alpha=0.1, zorder=1)
+    ax.axhline(ref_mean, color="black", lw=2, alpha=0.4, label="Global Mean")
+    ax.axhline(ref_mean + ref_std, color="gray", lw=1, ls="--", alpha=0.5)
+    ax.axhline(ref_mean - ref_std, color="gray", lw=1, ls="--", alpha=0.5)
+    ax.axhline(ref_mean + 2 * ref_std, color="#C0392B", lw=1.5, ls=":", alpha=0.7)
+    ax.axhline(ref_mean - 2 * ref_std, color="#C0392B", lw=1.5, ls=":", alpha=0.7)
 
-    # Global Statistics
-    ref_mean, ref_std = regime_series.mean(), regime_series.std()
-    current_val, current_date = regime_series.iloc[-1], df['Timestamp'].iloc[-1]
-    z_score = (current_val - ref_mean) / ref_std
+    # ✅ Label mean/±SD on the relevant lines (right edge)
+    trans = mtransforms.blended_transform_factory(ax.transAxes, ax.transData)
+    line_labels = [
+        (ref_mean + 2 * ref_std, f"+2σ  {ref_mean + 2 * ref_std:.2f}"),
+        (ref_mean + 1 * ref_std, f"+1σ  {ref_mean + 1 * ref_std:.2f}"),
+        (ref_mean,               f"μ    {ref_mean:.2f}"),
+        (ref_mean - 1 * ref_std, f"-1σ  {ref_mean - 1 * ref_std:.2f}"),
+        (ref_mean - 2 * ref_std, f"-2σ  {ref_mean - 2 * ref_std:.2f}"),
+    ]
+    for y, txt in line_labels:
+        ax.text(
+            0.995, y, txt,
+            transform=trans,
+            ha="right", va="center",
+            fontsize=8, color="black",
+            bbox=dict(facecolor="white", edgecolor="none", alpha=0.80, pad=1.5),
+            zorder=10,
+            clip_on=False,
+        )
 
-    # Range Persistence
-    lower_sd_limit = np.floor(z_score)
-    upper_sd_limit = lower_sd_limit + 1
-    in_range_mask = regime_series.apply(lambda x: lower_sd_limit <= (x - ref_mean)/ref_std < upper_sd_limit)
-    persistence_pct = (in_range_mask.sum() / len(regime_series)) * 100
+    # Persistence in current z-bucket
+    current_val, current_date = float(s.iloc[-1]), s.index[-1]
+    z_score = (current_val - ref_mean) / ref_std if ref_std != 0 else np.nan
 
-    # Reference Lines (Global)
-    plt.axhline(ref_mean, color='black', lw=2, alpha=0.4, label='Global Mean')
-    plt.axhline(ref_mean + ref_std, color='gray', lw=1, ls='--', alpha=0.5)
-    plt.axhline(ref_mean - ref_std, color='gray', lw=1, ls='--', alpha=0.5)
-    plt.axhline(ref_mean + 2*ref_std, color='#C0392B', lw=1.5, ls=':', alpha=0.7)
-    plt.axhline(ref_mean - 2*ref_std, color='#C0392B', lw=1.5, ls=':', alpha=0.7)
+    if ref_std != 0 and not np.isnan(z_score):
+        lower_sd_limit = np.floor(z_score)
+        upper_sd_limit = lower_sd_limit + 1
+        z_series = (s - ref_mean) / ref_std
+        in_range_mask = z_series.between(lower_sd_limit, upper_sd_limit, inclusive="left")
+        persistence_pct = float(in_range_mask.mean() * 100)
+    else:
+        lower_sd_limit, upper_sd_limit, persistence_pct = 0, 1, 0.0
 
-    # --- Annotations & Right Axis Labels ---
-    curr_xlim = plt.xlim()
-    plt.xlim(curr_xlim[0], curr_xlim[1] + (curr_xlim[1] - curr_xlim[0]) * 0.22)
-    text_x = plt.xlim()[1]
+    # give right margin for annotation/table
+    curr_xlim = ax.get_xlim()
+    ax.set_xlim(curr_xlim[0], curr_xlim[1] + (curr_xlim[1] - curr_xlim[0]) * 0.25)
 
-    # Scatter & Comprehensive "NOW" Annotation
-    plt.scatter(current_date, current_val, color='blue', s=60, zorder=6)
-    plt.annotate(f'Current Spread: {current_val:.2f} ({z_score:+.1f} SD)'
-                 f'\nRange Freq: {persistence_pct:.1f}%'
-                 f'{ma_stats_text}',
-                 xy=(current_date, current_val), xytext=(text_x, current_val),
-                 arrowprops=dict(arrowstyle='->', color='blue', lw=1.5),
-                 va='center', ha='right', fontsize=9, color='blue', fontweight='bold')
+    ax.scatter(current_date, current_val, color="blue", s=60, zorder=6)
 
-    # GLOBAL SD LABELS (RIGHT SIDE)
-    plt.text(text_x, ref_mean, f' Mean: {ref_mean:.2f}', va='bottom', ha='right', fontsize=8, alpha=0.7)
-    plt.text(text_x, ref_mean + ref_std, f' +1SD: {ref_mean + ref_std:.2f}', va='bottom', ha='right', fontsize=7, color='gray')
-    plt.text(text_x, ref_mean - ref_std, f' -1SD: {ref_mean - ref_std:.2f}', va='top', ha='right', fontsize=7, color='gray')
-    plt.text(text_x, ref_mean + 2 * ref_std, f' +2SD: {ref_mean + 2*ref_std:.2f}', va='bottom', ha='right', fontsize=7, color='#C0392B', fontweight='bold')
-    plt.text(text_x, ref_mean - 2 * ref_std, f' -2SD: {ref_mean - 2*ref_std:.2f}', va='top', ha='right', fontsize=7, color='#C0392B', fontweight='bold')
+    y_frac = 0.85 if current_val < ref_mean else 0.15
+    now_text = (
+        f"Current Spread: {current_val:.2f} ({z_score:+.1f} SD)\n"
+        f"Range Freq: {persistence_pct:.1f}%"
+        f"{ma_stats_text}"
+    )
+    ax.annotate(
+        now_text,
+        xy=(current_date, current_val), xycoords="data",
+        xytext=(1.02, y_frac), textcoords="axes fraction",
+        ha="left", va="center",
+        fontsize=9, color="blue", fontweight="bold",
+        bbox=dict(facecolor="white", edgecolor="none", alpha=0.90, boxstyle="round,pad=0.35"),
+        arrowprops=dict(arrowstyle="->", color="blue", lw=1.5),
+        annotation_clip=False,
+    )
 
-    # Status Bar
-    plt.text(0.5, 0.98, f"SMA Trend: [Weekly: {trend_w}] | [Monthly: {trend_m}]",
-             transform=plt.gca().transAxes, ha='center', va='top',
-             bbox=dict(facecolor='white', alpha=0.7, edgecolor='gray', boxstyle='round,pad=0.5'),
-             fontsize=10, fontweight='bold')
+    ax.text(
+        0.5, 0.98, f"SMA Trend: [Weekly: {trend_w}] | [Monthly: {trend_m}]",
+        transform=ax.transAxes, ha="center", va="top",
+        bbox=dict(facecolor="white", alpha=0.7, edgecolor="gray", boxstyle="round,pad=0.5"),
+        fontsize=10, fontweight="bold",
+    )
 
-    # Formatting & Legend
-    plt.title(f'Heatmap Dashboard | {int(lookback)}Y History | {label}', loc='left', fontsize=12, pad=25)
-    plt.legend(loc='upper left', fontsize=8, ncol=2)
-    plt.grid(True, alpha=0.1)
+    ax.set_title(f"1) Spread Dashboard | {int(lookback)}Y History | {label}", loc="left", fontsize=12, pad=25)
+    ax.legend(loc="upper left", fontsize=8, ncol=2)
+    ax.grid(True, alpha=0.1)
 
-    # Bucket Table 
-    dev = (regime_series - ref_mean).dropna()
+    # Bucket table (global dev buckets)
+    dev = (s - ref_mean).dropna()
     bucket = (np.round(dev / 0.5) * 0.5)
-
     counts = pd.Series(bucket).value_counts().sort_index(ascending=False)
 
-    half_width = 0.25  # because bucket size is 0.5, so +/- 0.25 around the center
-
+    half_width = 0.25
     table_data = []
     for center, v in counts[counts > 0].items():
         lo = center - half_width
         hi = center + half_width
-        # Range label like: [+0.75, +1.25)
         range_label = f"[{lo:+.2f}, {hi:+.2f})"
         table_data.append([range_label, int(v)])
 
     table = plt.table(
         cellText=table_data,
-        colLabels=['$ Dev Range', 'Count'],
-        loc='upper left',
-        bbox=[1.02, 0.2, 0.3, 0.4]
+        colLabels=["$ Dev Range", "Count"],
+        loc="upper left",
+        bbox=[1.02, 0.2, 0.3, 0.4],
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(7)   
+    table.set_fontsize(7)
 
     plt.tight_layout()
 
-    # Streamlit display (instead of plt.show + print)
     st.subheader("1) Spread Dashboard")
-
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Current spread", f"{current_val:.2f}")
     c2.metric("Range Freq", f"{persistence_pct:.1f}%")
     c3.metric("Weekly trend (MA)", trend_w)
     c4.metric("Monthly trend (MA)", trend_m)
+    st.pyplot(fig, use_container_width=True)
+
+# =========================================================
+# 2) MA Retracement Dashboard 
+# =========================================================
+def render_ma_retracement_dashboard_streamlit(
+    lookback, ma_window, visual_choice,
+    turn_lookback=5, min_gap_days=20,
+    retrace_levels=(0.70, 0.50, 0.30, 0.10),
+    max_forward_days=250
+):
+    latest_date = df_base["Timestamp"].max()
+    cutoff_date = latest_date - pd.DateOffset(years=int(lookback))
+    df = df_base[df_base["Timestamp"] >= cutoff_date].copy()
+    df = df.sort_values("Timestamp").reset_index(drop=True)
+
+    # spreads
+    df["spread_close"] = df["WTI_CLOSE"] - df["Brent_CLOSE"]
+    df["spread_high"] = df["WTI_HIGH"] - df["Brent_HIGH"]
+    df["spread_WTI_low_Brent_high"] = df["WTI_LOW"] - df["Brent_HIGH"]
+    df["spread_WTI_high_Brent_low"] = df["WTI_HIGH"] - df["Brent_LOW"]
+
+    labels_map = {
+        "spread_close": ("Close-to-Close", "#2E86C1"),
+        "spread_high": ("High-to-High", "#27AE60"),
+        "spread_WTI_low_Brent_high": ("Floor (WTI Low - Brent High)", "#E74C3C"),
+        "spread_WTI_high_Brent_low": ("Ceiling (WTI High - Brent Low)", "#8E44AD"),
+    }
+    label, _ = labels_map[visual_choice]
+
+    s = build_spread_series(df, visual_choice)
+    safe_window = max(2, min(int(ma_window), len(s)))
+    ma = s.rolling(window=safe_window).mean()
+    amp = (s - ma)
+
+    # Detect turns on amplitude
+    amp_slope = amp.diff(int(turn_lookback))
+    slope_sign = np.sign(amp_slope)
+    slope_sign = slope_sign.replace(0, np.nan).ffill()   # treat 0 as “no change”
+    amp_turn = slope_sign.diff()
+
+
+    inflexions = []
+    last_t = None
+    for t in amp_turn.index:
+        if pd.isna(amp_turn.loc[t]) or pd.isna(amp.loc[t]):
+            continue
+        if amp_turn.loc[t] == -2:
+            typ = "peak"
+        elif amp_turn.loc[t] == 2:
+            typ = "trough"
+        else:
+            continue
+        if last_t is not None and (pd.Timestamp(t) - pd.Timestamp(last_t)).days < int(min_gap_days):
+            continue
+        inflexions.append((t, typ))
+        last_t = t
+
+    # Sensitivity stats
+    summary_rows = []
+    for lvl in list(retrace_levels):
+        days_list, move_list = [], []
+        for t0, _ in inflexions:
+            a0 = amp.loc[t0]
+            if pd.isna(a0) or a0 == 0:
+                continue
+            future = amp.loc[t0:].iloc[1 : max_forward_days + 1]
+            for d, (t1, a1) in enumerate(future.items(), start=1):
+                if pd.isna(a1):
+                    continue
+                if abs(float(a1)) <= float(lvl) * abs(float(a0)):
+                    days_list.append(d)
+                    move_list.append(abs(float(s.loc[t1]) - float(s.loc[t0])))
+                    break
+
+        retrace_pct = int((1 - float(lvl)) * 100)
+        avg_days = float(np.mean(days_list)) if days_list else 0.0
+        std_days = float(np.std(days_list)) if days_list else 0.0
+        avg_move = float(np.mean(move_list)) if move_list else 0.0
+        summary_rows.append([f"{retrace_pct}%", f"{avg_days:.1f}", f"±{std_days:.1f}", f"${avg_move:.2f}"])
+
+    # Plotting
+    plt.close("all")
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(15, 8), sharex=True,
+        gridspec_kw={"height_ratios": [2, 1]}
+    )
+
+    fig.subplots_adjust(right=0.78, hspace=0.10)
+
+    ax1.plot(s.index, s.values, label=f"{label}", alpha=0.55, zorder=1)
+    ax1.plot(ma.index, ma.values, label=f"{safe_window}D MA", color="black", lw=1.8, zorder=2)
+    ax1.set_ylabel("Spread ($/BBL)")
+
+    ax2.plot(amp.index, amp.values, label="MA Amplitude (Spread − MA)", lw=1.6, zorder=2)
+    ax2.axhline(0, color="black", lw=1, ls="--", alpha=0.5)
+    ax2.set_ylabel("Amplitude ($)")
+
+    # Mark peaks/troughs
+    peak_dates = [t for t, typ in inflexions if typ == "peak"]
+    trough_dates = [t for t, typ in inflexions if typ == "trough"]
+
+    peak_marker = "v"
+    trough_marker = "^"
+
+    PEAK_S_AX2 = 45
+    PEAK_S_AX1 = 35
+    TROUGH_S_AX2 = 45
+    TROUGH_S_AX1 = 35
+
+    if peak_dates:
+        ax2.scatter(
+            peak_dates, amp.loc[peak_dates],
+            marker=peak_marker, color="blue", s=PEAK_S_AX2, zorder=5,
+            label="Peak (Blue arrow)"
+        )
+        ax1.scatter(
+            peak_dates, s.loc[peak_dates],
+            marker=peak_marker, color="blue", s=PEAK_S_AX1, zorder=5
+        )
+
+    if trough_dates:
+        ax2.scatter(
+            trough_dates, amp.loc[trough_dates],
+            marker=trough_marker, color="red", s=TROUGH_S_AX2, zorder=5,
+            label="Trough (Red arrow)"
+        )
+        ax1.scatter(
+            trough_dates, s.loc[trough_dates],
+            marker=trough_marker, color="red", s=TROUGH_S_AX1, zorder=5
+        )
+
+    ax1.legend(loc="upper left", fontsize=9)
+    ax2.legend(loc="upper left", fontsize=9)
+
+    # --- Table 1: Latest inflexion + retrace prices (top-right) ---
+    if inflexions:
+        t_lat, typ_lat = inflexions[-1]
+        a0_lat = amp.loc[t_lat]
+
+        inflex_data = [
+            ["Type", typ_lat.upper()],
+            ["Date", pd.Timestamp(t_lat).strftime("%Y-%m-%d")],
+            ["Spread @ Start", f"${float(s.loc[t_lat]):.2f}"],
+            ["MA @ Start", f"${float(ma.loc[t_lat]):.2f}"],
+            ["Amp @ Start", f"${float(a0_lat):.2f}"],
+        ]
+
+        future_lat = amp.loc[t_lat:].iloc[1 : max_forward_days + 1]
+        for lvl in retrace_levels:
+            retrace_pct = int((1 - float(lvl)) * 100)
+            target_display = "Pending"
+            for t1, a1 in future_lat.items():
+                if pd.isna(a1):
+                    continue
+                if abs(float(a1)) <= float(lvl) * abs(float(a0_lat)):
+                    target_display = f"${float(s.loc[t1]):.2f} ({pd.Timestamp(t1).strftime('%Y-%m-%d')})"
+                    break
+            inflex_data.append([f"{retrace_pct}% Level", target_display])
+
+        inflex_ax = fig.add_axes([0.80, 0.58, 0.19, 0.37])
+        inflex_ax.axis("off")
+        inflex_ax.set_title(
+            "LATEST MA-RETRACE\nSTART & RETRACE PRICES",
+            fontsize=9, fontweight="bold",
+            color="darkred" if typ_lat == "peak" else "darkblue",
+        )
+        t1 = inflex_ax.table(cellText=inflex_data, loc="center", cellLoc="left")
+        t1.auto_set_font_size(False)
+        t1.set_fontsize(7.5)
+        t1.scale(1.0, 1.35)
+
+    # --- Table 2: Sensitivity (bottom-right) ---
+    table_ax = fig.add_axes([0.80, 0.08, 0.19, 0.45])
+    table_ax.axis("off")
+    table_ax.text(
+        0.5, 0.98, "MA Retrace Sensitivity",
+        ha="center", va="top",
+        fontsize=9, fontweight="bold",
+        transform=table_ax.transAxes,
+    )
+    tbl = table_ax.table(
+        cellText=summary_rows,
+        colLabels=["Retrace %", "Avg Days", "1 SD", "Avg $ Move"],
+        loc="center",
+        cellLoc="center",
+        bbox=[0.0, 0.0, 1.0, 0.90],
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(7.5)
+    tbl.scale(1.0, 1.25)
+
+    st.subheader("2) MA Retracement Dashboard")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("MA Window (D)", int(safe_window))
+    c2.metric("# Inflexions", len(inflexions))
+    if inflexions:
+        c4.metric("Last Start", typ_lat.upper(), delta=pd.Timestamp(t_lat).strftime("%Y-%m-%d"), delta_color="off")
+    else:
+        c4.metric("Last Start", "N/A")
 
     st.pyplot(fig, use_container_width=True)
 
-    st.markdown("### Analysis Snapshot")
-    st.write(f"View: **{label}**")
-    st.write(f"{persistence_pct:.1f}% of time spent in {lower_sd_limit:.0f}SD to {upper_sd_limit:.0f}SD bucket.")
-    st.write(f"SMA Trend (Lookback {int(ma_window)}D): Weekly={trend_w} | Monthly={trend_m}")
+    st.markdown("### Interpretation")
+    st.write("**MA Amplitude = Spread − Moving Average.** Peaks/troughs are detected on this amplitude series.")
+    st.write("Retracement timing is measured as **days until |Amplitude| shrinks to X% of its starting value**.")
 
 # =========================================================
-# 2) Persistence Dashboard 
-# =========================================================
-# ... (Keep all your existing imports and load_data function)
-
-# =========================================================
-# 2) Persistence Dashboard 
+# 3) Persistence Dashboard 
 # =========================================================
 def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
-    # Filter Data
-    latest_date = df_base['Timestamp'].max()
+    latest_date = df_base["Timestamp"].max()
     cutoff_date = latest_date - pd.DateOffset(years=lookback)
-    df = df_base[df_base['Timestamp'] >= cutoff_date].copy()
-    
-    # Calculate Spread (Close-to-Close)
-    s = df['WTI_CLOSE'] - df['Brent_CLOSE']
-    s.index = df['Timestamp']
+    df = df_base[df_base["Timestamp"] >= cutoff_date].copy()
+
+    s = df["WTI_CLOSE"] - df["Brent_CLOSE"]
+    s.index = df["Timestamp"]
     s = s.sort_index().dropna()
 
-    # Signal Construction
     if fast_ma >= slow_ma:
         st.error("Error: Fast MA must be smaller than Slow MA.")
         return
@@ -230,132 +468,180 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     ma_slow = s.rolling(slow_ma).mean()
     signal = ma_fast - ma_slow
 
-    # Inflexion Detection logic
+    # Inflexion detection
     slope = ma_fast.diff(5)
     turn = np.sign(slope).diff()
     inflexions = []
     last_t = None
     for t in turn.index:
-        if pd.isna(turn.loc[t]) or pd.isna(signal.loc[t]): continue
-        if turn.loc[t] == -2: typ = "peak"
-        elif turn.loc[t] == 2: typ = "trough"
-        else: continue
-        if last_t is not None and (t - last_t).days < 20: continue
-        if abs(signal.loc[t]) < 0.2: continue
+        if pd.isna(turn.loc[t]) or pd.isna(signal.loc[t]):
+            continue
+        if turn.loc[t] == -2:
+            typ = "peak"
+        elif turn.loc[t] == 2:
+            typ = "trough"
+        else:
+            continue
+        if last_t is not None and (t - last_t).days < 20:
+            continue
+        if abs(signal.loc[t]) < 0.2:
+            continue
         inflexions.append((t, typ))
         last_t = t
 
-    # --- Sensitivity Analysis Logic ---
+    # Sensitivity table rows
     decay_values = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
     summary_rows = []
     for d_frac in decay_values:
         wane_days, wane_diffs = [], []
-        for t0, typ in inflexions:
+        for t0, _ in inflexions:
             s0 = signal.loc[t0]
-            if pd.isna(s0) or s0 == 0: continue
+            if pd.isna(s0) or s0 == 0:
+                continue
             future = signal.loc[t0:].iloc[1:250]
-            for d, (t, val) in enumerate(future.items(), start=1):
+            for d, (t1, val) in enumerate(future.items(), start=1):
                 if abs(val) <= d_frac * abs(s0):
                     wane_days.append(d)
-                    wane_diffs.append(abs(s.loc[t] - s.loc[t0]))
+                    wane_diffs.append(abs(s.loc[t1] - s.loc[t0]))
                     break
+
         avg_days = np.mean(wane_days) if wane_days else 0
         std_days = np.std(wane_days) if wane_days else 0
         avg_move = np.mean(wane_diffs) if wane_diffs else 0
-        summary_rows.append([f"{(1 - d_frac)*100:.0f}%", f"{avg_days:.1f}", f"±{std_days:.1f}", f"${avg_move:.2f}"])
 
-    # --- Plotting Setup ---
-    plt.close('all')
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 8), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
+        # d_frac = fraction remaining; convert to “retraced %”
+        summary_rows.append([
+            f"{(1 - d_frac) * 100:.0f}%",
+            f"{avg_days:.1f}",
+            f"±{std_days:.1f}",
+            f"${avg_move:.2f}"
+        ])
 
-    # Top Panel: Price + MAs
-    ax1.plot(s.index, s.values, label="Actual Spread", color='lightgray', alpha=0.5, zorder=1)
-    ax1.plot(ma_fast.index, ma_fast.values, label=f"Fast {fast_ma}D", color='#2E86C1', lw=2, zorder=3)
-    ax1.plot(ma_slow.index, ma_slow.values, label=f"Slow {slow_ma}D", color='#E67E22', lw=2, zorder=2)
+    # Plotting
+    plt.close("all")
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(15, 8), sharex=True, gridspec_kw={"height_ratios": [2, 1]}
+    )
+    fig.subplots_adjust(right=0.78, hspace=0.10)
+
+    ax1.plot(s.index, s.values, label="Actual Spread", alpha=0.5, zorder=1)
+    ax1.plot(ma_fast.index, ma_fast.values, label=f"Fast {fast_ma}D", lw=2, zorder=3)
+    ax1.plot(ma_slow.index, ma_slow.values, label=f"Slow {slow_ma}D", lw=2, zorder=2)
     ax1.set_ylabel("Price ($/BBL)")
-    ax1.legend(loc='upper left', fontsize=9, frameon=True)
+    ax1.legend(loc="upper left", fontsize=9, frameon=True)
 
-    # Bottom Panel: Momentum Signal + Triangles
-    ax2.plot(signal.index, signal.values, label="Momentum Signal", color='#27AE60', lw=1.5)
-    ax2.axhline(0, color='black', lw=1, ls='--', alpha=0.5)
-    
-    peak_dates = [t for t, typ in inflexions if typ == 'peak']
-    trough_dates = [t for t, typ in inflexions if typ == 'trough']
-    
-    if peak_dates: 
-        ax2.scatter(peak_dates, signal.loc[peak_dates], marker="v", color='red', s=100, label="Peak", zorder=5)
-    if trough_dates: 
-        ax2.scatter(trough_dates, signal.loc[trough_dates], marker="^", color='blue', s=100, label="Trough", zorder=5)
-    
+    ax2.plot(signal.index, signal.values, label="Momentum Signal (Fast MA − Slow MA)", lw=1.5)
+    ax2.axhline(0, color="black", lw=1, ls="--", alpha=0.5)
+
+    peak_dates = [t for t, typ in inflexions if typ == "peak"]
+    trough_dates = [t for t, typ in inflexions if typ == "trough"]
+
+    if peak_dates:
+        ax2.scatter(peak_dates, signal.loc[peak_dates], marker="v", color="red", s=100, label="Peak", zorder=5)
+    if trough_dates:
+        ax2.scatter(trough_dates, signal.loc[trough_dates], marker="^", color="blue", s=100, label="Trough", zorder=5)
+
     ax2.set_ylabel("Signal Amplitude")
-    ax2.legend(loc='upper left', fontsize=9)
+    ax2.legend(loc="upper left", fontsize=9)
 
-    # --- INFO TABLES ---
+    max_forward_days = 300
+    target_levels = [0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]
+
     if inflexions:
         t_lat, typ_lat = inflexions[-1]
         s0_lat = signal.loc[t_lat]
+
         inflex_data = [
             ["Type", typ_lat.upper()],
-            ["Date", t_lat.strftime('%Y-%m-%d')],
-            ["Start Price", f"${s.loc[t_lat]:.2f}"]
+            ["Date", pd.Timestamp(t_lat).strftime("%Y-%m-%d")],
+            ["Spread @ Start", f"${float(s.loc[t_lat]):.2f}"],
+            ["Signal @ Start", f"{float(s0_lat):.2f}"],
         ]
-        
-        target_levels = [0.70, 0.50, 0.30, 0.10]
-        future_lat = signal.loc[t_lat:].iloc[1:]
+
+        future_lat = signal.loc[t_lat:].iloc[1 : max_forward_days + 1]
         for lvl in target_levels:
-            retrace_pct = int((1 - lvl) * 100)
+            retrace_pct = int((1 - float(lvl)) * 100)
             target_display = "Pending"
-            for t_f, val_f in future_lat.items():
-                if abs(val_f) <= lvl * abs(s0_lat):
-                    target_display = f"${s.loc[t_f]:.2f} ({t_f.strftime('%Y-%m-%d')})"
+            for t1, v1 in future_lat.items():
+                if pd.isna(v1):
+                    continue
+                if abs(float(v1)) <= float(lvl) * abs(float(s0_lat)):
+                    target_display = f"${float(s.loc[t1]):.2f} ({pd.Timestamp(t1).strftime('%Y-%m-%d')})"
                     break
             inflex_data.append([f"{retrace_pct}% Level", target_display])
 
-        # Table 1: Latest Info
-        inflex_ax = fig.add_axes([1.02, 0.60, 0.35, 0.25]) 
-        inflex_ax.axis('off')
-        inflex_ax.set_title("LATEST SIGNAL & RETRACE PRICES", fontsize=10, fontweight='bold', color='darkred' if typ_lat == 'peak' else 'darkblue')
-        t1 = inflex_ax.table(cellText=inflex_data, loc='center', cellLoc='left')
-        t1.auto_set_font_size(False); t1.set_fontsize(8); t1.scale(1.1, 1.8)
+        inflex_ax = fig.add_axes([0.80, 0.58, 0.19, 0.37])
+        inflex_ax.axis("off")
+        inflex_ax.set_title(
+            "LATEST SIGNAL\nSTART & DECAY TARGETS",
+            fontsize=9, fontweight="bold",
+            color="darkred" if typ_lat == "peak" else "darkblue",
+        )
+        t1 = inflex_ax.table(cellText=inflex_data, loc="center", cellLoc="left")
+        t1.auto_set_font_size(False)
+        t1.set_fontsize(7.5)
+        t1.scale(1.0, 1.35)
 
-    # Table 2: Historical Sensitivity
-    table_ax = fig.add_axes([1.02, 0.15, 0.35, 0.35])
-    table_ax.axis('off')
-    table_ax.set_title("Signal Retrace Sensitivity", fontsize=10, fontweight='bold', pad=20)
-    tbl = table_ax.table(cellText=summary_rows, colLabels=['Retrace %', 'Avg Days', '1 SD', 'Avg $ Move'], loc='center', cellLoc='center')
-    tbl.auto_set_font_size(False); tbl.set_fontsize(8); tbl.scale(1.1, 1.5)
 
-    # Streamlit Header and Metrics
-    st.subheader("2) Persistence Dashboard")
+    table_ax = fig.add_axes([0.80, 0.08, 0.19, 0.45])
+    table_ax.axis("off")
+    table_ax.text(
+        0.5, 0.98, "Persistence Sensitivity",
+        ha="center", va="top",
+        fontsize=9, fontweight="bold",
+        transform=table_ax.transAxes,
+    )
+    tbl = table_ax.table(
+        cellText=summary_rows,
+        colLabels=["Retrace %", "Avg Days", "1 SD", "Avg $ Move"],
+        loc="center",
+        cellLoc="center",
+        bbox=[0.0, 0.0, 1.0, 0.90],
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(7.5)
+    tbl.scale(1.0, 1.25)
+
+    # Streamlit header + metrics + plot
+    st.subheader("3) Persistence Dashboard")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Fast MA", int(fast_ma))
     c2.metric("Slow MA", int(slow_ma))
     c3.metric("# Inflexions", len(inflexions))
     if inflexions:
-        c4.metric("Last Signal", typ_lat.upper(), delta=t_lat.strftime('%Y-%m-%d'), delta_color="off")
+        c4.metric("Last Signal", typ_lat.upper(), delta=pd.Timestamp(t_lat).strftime("%Y-%m-%d"), delta_color="off")
+    else:
+        c4.metric("Last Signal", "N/A")
 
     st.pyplot(fig, use_container_width=True)
+
 
 # =========================================================
 # Main Execution Block
 # =========================================================
-
-# 1) Render Spread Dashboard
 render_spread_dashboard_streamlit(
     lookback=lookback,
     ma_window=ma_window,
     visual_choice=visual_choice,
     show_ma=show_ma,
-    show_ma_sd=show_ma_sd
+    show_ma_sd=show_ma_sd,
 )
 
 st.divider()
 
-# 2) Render Persistence Dashboard
+render_ma_retracement_dashboard_streamlit(
+    lookback=mr_lookback,
+    ma_window=int(mr_ma_window),  
+    visual_choice=visual_choice,
+    turn_lookback=MR_TURN_LOOKBACK,
+    min_gap_days=MR_MIN_GAP_DAYS,
+    retrace_levels=MR_RETRACE_LEVELS,
+)
+
+st.divider()
+
 render_persistence_dashboard_streamlit(
     lookback=p_lookback,
     fast_ma=fast_ma,
-    slow_ma=slow_ma
+    slow_ma=slow_ma,
 )
-
-
