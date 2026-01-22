@@ -395,7 +395,7 @@ def render_ma_retracement_dashboard_streamlit(
     st.pyplot(fig, use_container_width=True)
 
     st.markdown("### Interpretation")
-    st.write("**Amplitude = Spread − MA.** Peaks/troughs are detected on the amplitude series (not the raw spread).")
+    st.write("**Amplitude = Spread − MA.** Peaks/troughs are detected on the amplitude series.")
     st.write("Retracement timing measures **how many days until |Amplitude| shrinks to X% of its starting value**.")
     st.write("The sensitivity table aggregates retracement behavior across all detected inflexions in the lookback window.")
 
@@ -557,3 +557,4 @@ st.divider()
 render_ma_retracement_dashboard_streamlit(mr_lookback, int(mr_ma_window), visual_choice, MR_MIN_GAP_DAYS, MR_RETRACE_LEVELS)
 st.divider()
 render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma)
+
