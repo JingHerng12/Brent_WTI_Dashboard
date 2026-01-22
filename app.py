@@ -358,21 +358,4 @@ render_persistence_dashboard_streamlit(
     slow_ma=slow_ma
 )
 
-# =========================================================
-# Render both dashboards
-# =========================================================
-render_spread_dashboard_streamlit(
-    lookback=lookback,
-    ma_window=ma_window,
-    visual_choice=visual_choice,
-    show_ma=show_ma,
-    show_ma_sd=show_ma_sd
-)
 
-st.divider()
-
-render_persistence_dashboard_streamlit(
-    lookback=p_lookback,
-    fast_ma=fast_ma,
-    slow_ma=slow_ma
-)
