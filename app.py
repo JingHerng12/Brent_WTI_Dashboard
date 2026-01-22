@@ -205,6 +205,11 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
 # =========================================================
 # 2) Persistence Dashboard 
 # =========================================================
+# ... (Keep all your existing imports and load_data function)
+
+# =========================================================
+# 2) Persistence Dashboard 
+# =========================================================
 def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     # Filter Data
     latest_date = df_base['Timestamp'].max()
@@ -218,7 +223,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
 
     # Signal Construction
     if fast_ma >= slow_ma:
-        print("Error: Fast MA must be smaller than Slow MA.")
+        st.error("Error: Fast MA must be smaller than Slow MA.")
         return
 
     ma_fast = s.rolling(fast_ma).mean()
@@ -240,8 +245,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
         inflexions.append((t, typ))
         last_t = t
 
-    # --- Sensitivity Analysis Logic (Global Stats) ---
-    # This populates the summary_rows variable to fix the NameError
+    # --- Sensitivity Analysis Logic ---
     decay_values = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
     summary_rows = []
     for d_frac in decay_values:
@@ -262,13 +266,12 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
 
     # --- Plotting Setup ---
     plt.close('all')
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 8), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 8), sharex=True, gridspec_kw={'height_ratios': [2, 1]})
 
-    # Top Panel: Price + MAs + Legend
+    # Top Panel: Price + MAs
     ax1.plot(s.index, s.values, label="Actual Spread", color='lightgray', alpha=0.5, zorder=1)
     ax1.plot(ma_fast.index, ma_fast.values, label=f"Fast {fast_ma}D", color='#2E86C1', lw=2, zorder=3)
     ax1.plot(ma_slow.index, ma_slow.values, label=f"Slow {slow_ma}D", color='#E67E22', lw=2, zorder=2)
-    ax1.set_title(f"Spread Trend Persistence Dashboard | {lookback}Y History", fontsize=14)
     ax1.set_ylabel("Price ($/BBL)")
     ax1.legend(loc='upper left', fontsize=9, frameon=True)
 
@@ -291,18 +294,14 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     if inflexions:
         t_lat, typ_lat = inflexions[-1]
         s0_lat = signal.loc[t_lat]
-        
-        # Base Data for Latest Inflexion
         inflex_data = [
             ["Type", typ_lat.upper()],
             ["Date", t_lat.strftime('%Y-%m-%d')],
             ["Start Price", f"${s.loc[t_lat]:.2f}"]
         ]
         
-        # Calculate specific retrace prices for THIS signal
-        target_levels = [0.70, 0.50, 0.30, 0.10] # 30%, 50%, 70%, 90%
+        target_levels = [0.70, 0.50, 0.30, 0.10]
         future_lat = signal.loc[t_lat:].iloc[1:]
-        
         for lvl in target_levels:
             retrace_pct = int((1 - lvl) * 100)
             target_display = "Pending"
@@ -312,29 +311,52 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
                     break
             inflex_data.append([f"{retrace_pct}% Level", target_display])
 
-        # Render Table 1: Latest Info
-        inflex_ax = fig.add_axes([1.02, 0.60, 0.40, 0.25]) 
+        # Table 1: Latest Info
+        inflex_ax = fig.add_axes([1.02, 0.60, 0.35, 0.25]) 
         inflex_ax.axis('off')
-        inflex_ax.set_title("LATEST SIGNAL & RETRACE PRICES", fontsize=11, fontweight='bold', color='darkred' if typ_lat == 'peak' else 'darkblue')
+        inflex_ax.set_title("LATEST SIGNAL & RETRACE PRICES", fontsize=10, fontweight='bold', color='darkred' if typ_lat == 'peak' else 'darkblue')
         t1 = inflex_ax.table(cellText=inflex_data, loc='center', cellLoc='left')
-        t1.auto_set_font_size(False); t1.set_fontsize(9); t1.scale(1.2, 1.8)
+        t1.auto_set_font_size(False); t1.set_fontsize(8); t1.scale(1.1, 1.8)
 
-    # Render Table 2: Historical Sensitivity
-    table_ax = fig.add_axes([1.02, 0.15, 0.40, 0.35])
+    # Table 2: Historical Sensitivity
+    table_ax = fig.add_axes([1.02, 0.15, 0.35, 0.35])
     table_ax.axis('off')
-    table_ax.set_title("Signal Retrace Sensitivity", fontsize=11, fontweight='bold', pad=20)
+    table_ax.set_title("Signal Retrace Sensitivity", fontsize=10, fontweight='bold', pad=20)
     tbl = table_ax.table(cellText=summary_rows, colLabels=['Retrace %', 'Avg Days', '1 SD', 'Avg $ Move'], loc='center', cellLoc='center')
-    tbl.auto_set_font_size(False); tbl.set_fontsize(9); tbl.scale(1.2, 1.5)
+    tbl.auto_set_font_size(False); tbl.set_fontsize(8); tbl.scale(1.1, 1.5)
 
-    plt.show()
-
-    # Streamlit display
-    c1, c2, c3 = st.columns(3)
+    # Streamlit Header and Metrics
+    st.subheader("2) Persistence Dashboard")
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Fast MA", int(fast_ma))
     c2.metric("Slow MA", int(slow_ma))
     c3.metric("# Inflexions", len(inflexions))
+    if inflexions:
+        c4.metric("Last Signal", typ_lat.upper(), delta=t_lat.strftime('%Y-%m-%d'), delta_color="off")
 
     st.pyplot(fig, use_container_width=True)
+
+# =========================================================
+# Main Execution Block
+# =========================================================
+
+# 1) Render Spread Dashboard
+render_spread_dashboard_streamlit(
+    lookback=lookback,
+    ma_window=ma_window,
+    visual_choice=visual_choice,
+    show_ma=show_ma,
+    show_ma_sd=show_ma_sd
+)
+
+st.divider()
+
+# 2) Render Persistence Dashboard
+render_persistence_dashboard_streamlit(
+    lookback=p_lookback,
+    fast_ma=fast_ma,
+    slow_ma=slow_ma
+)
 
 # =========================================================
 # Render both dashboards
@@ -354,4 +376,3 @@ render_persistence_dashboard_streamlit(
     fast_ma=fast_ma,
     slow_ma=slow_ma
 )
-
