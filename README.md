@@ -46,7 +46,6 @@ Includes:
 
 Key outputs:
 - MA window used
-- # of detected inflexions
 - Latest peak/trough start date + starting amplitude
 - Average days-to-retrace + average $ move for each retrace threshold
 
@@ -64,7 +63,6 @@ Includes:
 
 Key outputs:
 - Fast/Slow MA settings
-- # of signal inflexions
 - Latest signal peak/trough start date + starting signal level
 - Average time-to-decay + average $ move during decay
 
