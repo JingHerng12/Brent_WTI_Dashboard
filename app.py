@@ -87,7 +87,7 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
     cutoff_date = latest_date - pd.DateOffset(years=int(lookback))
     df = df_base[df_base["Timestamp"] >= cutoff_date].copy()
 
-    # Calculate Spreads
+    # Calculate Spreadspip
     df["spread_close"] = df["WTI_CLOSE"] - df["Brent_CLOSE"]
     df["spread_high"] = df["WTI_HIGH"] - df["Brent_HIGH"]
     df["spread_WTI_low_Brent_high"] = df["WTI_LOW"] - df["Brent_HIGH"]
@@ -211,27 +211,6 @@ def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_m
     ax.legend(loc="upper left", fontsize=8, ncol=2)
     ax.grid(True, alpha=0.1)
 
-    dev = (s - ref_mean).dropna()
-    bucket = (np.round(dev / 0.5) * 0.5)
-    counts = pd.Series(bucket).value_counts().sort_index(ascending=False)
-
-    half_width = 0.25
-    table_data = []
-    for center, v in counts[counts > 0].items():
-        lo = center - half_width
-        hi = center + half_width
-        range_label = f"[{lo:+.2f}, {hi:+.2f})"
-        table_data.append([range_label, int(v)])
-
-    table = plt.table(
-        cellText=table_data,
-        colLabels=["$ Dev Range", "Count"],
-        loc="upper left",
-        bbox=[1.02, 0.2, 0.3, 0.4],
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(7)
-
     plt.tight_layout()
 
     st.subheader("1) Spread Dashboard")
@@ -280,6 +259,51 @@ def render_ma_retracement_dashboard_streamlit(
         key=lambda x: x[0]
     )
 
+    # --- Snapshot-based detection for historical grey arrows ---
+    confirmation_days = 5
+    check_interval = 1  # Check every 5 days
+    historical_detections = []  # Store superseded "latest" inflections
+    
+    last_peak_detected = None
+    last_trough_detected = None
+    
+    for i in range(safe_window + confirmation_days, len(amp), check_interval):
+        # Use data up to current point plus confirmation window
+        end_idx = min(i + confirmation_days, len(amp))
+        rolling_amp = amp.iloc[:end_idx]
+        
+        # Calculate rolling noise threshold
+        rolling_noise = float(rolling_amp.std() * 0.15)
+        
+        # Detect peaks/troughs in this rolling window
+        roll_peaks, _ = find_peaks(rolling_amp.values, distance=int(min_gap_days), prominence=rolling_noise)
+        roll_troughs, _ = find_peaks(-rolling_amp.values, distance=int(min_gap_days), prominence=rolling_noise)
+        
+        # Find the latest peak and trough in this window (confirmed ones only)
+        confirmed_peaks = [idx for idx in roll_peaks if idx < len(rolling_amp) - confirmation_days]
+        confirmed_troughs = [idx for idx in roll_troughs if idx < len(rolling_amp) - confirmation_days]
+        
+        current_peak = rolling_amp.index[confirmed_peaks[-1]] if confirmed_peaks else None
+        current_trough = rolling_amp.index[confirmed_troughs[-1]] if confirmed_troughs else None
+        
+        # Track evolution of "latest peak"
+        if current_peak is not None:
+            if last_peak_detected is not None and current_peak != last_peak_detected:
+                # The "latest peak" has changed - archive the old one as grey
+                if last_peak_detected not in [d for d, _ in historical_detections]:
+                    historical_detections.append((last_peak_detected, "peak"))
+            last_peak_detected = current_peak
+        
+        # Track evolution of "latest trough"
+        if current_trough is not None:
+            if last_trough_detected is not None and current_trough != last_trough_detected:
+                # The "latest trough" has changed - archive the old one as grey
+                if last_trough_detected not in [d for d, _ in historical_detections]:
+                    historical_detections.append((last_trough_detected, "trough"))
+            last_trough_detected = current_trough
+    
+    historical_detections.sort(key=lambda x: x[0])
+
     # --- Sensitivity table ---
     summary_rows = []
     for lvl in list(retrace_levels):
@@ -319,6 +343,18 @@ def render_ma_retracement_dashboard_streamlit(
     peak_dates = [t for t, typ in inflexions if typ == "peak"]
     trough_dates = [t for t, typ in inflexions if typ == "trough"]
 
+    # Plot historical detections (grey arrows)
+    hist_peak_dates = [t for t, typ in historical_detections if typ == "peak"]
+    hist_trough_dates = [t for t, typ in historical_detections if typ == "trough"]
+    
+    if hist_peak_dates:
+        ax2.scatter(hist_peak_dates, amp.loc[hist_peak_dates], marker="v", color="grey", s=40, zorder=4, alpha=0.35, label="Historical Peak")
+        ax1.scatter(hist_peak_dates, s.loc[hist_peak_dates], marker="v", color="grey", s=30, zorder=4, alpha=0.35)
+    if hist_trough_dates:
+        ax2.scatter(hist_trough_dates, amp.loc[hist_trough_dates], marker="^", color="grey", s=40, zorder=4, alpha=0.35, label="Historical Trough")
+        ax1.scatter(hist_trough_dates, s.loc[hist_trough_dates], marker="^", color="grey", s=30, zorder=4, alpha=0.35)
+
+    # Plot current inflections (colored arrows)
     if peak_dates:
         ax2.scatter(peak_dates, amp.loc[peak_dates], marker="v", color="blue", s=45, zorder=5, label="Peak")
         ax1.scatter(peak_dates, s.loc[peak_dates], marker="v", color="blue", s=35, zorder=5)
@@ -430,6 +466,52 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
         key=lambda x: x[0]
     )
 
+    # --- Rolling detection for historical grey arrows ---
+    confirmation_days = 10
+    check_interval = 5  # Check every 5 days
+    historical_detections = []  # Store superseded "latest" inflections
+    
+    last_peak_detected = None
+    last_trough_detected = None
+    
+    min_window = max(int(fast_ma), int(slow_ma))
+    for i in range(min_window + confirmation_days, len(signal), check_interval):
+        # Use data up to current point plus confirmation window
+        end_idx = min(i + confirmation_days, len(signal))
+        rolling_signal = signal.iloc[:end_idx]
+        
+        # Calculate rolling noise threshold
+        rolling_noise = float(rolling_signal.std() * 0.15)
+        
+        # Detect peaks/troughs in this rolling window
+        roll_peaks, _ = find_peaks(rolling_signal.values, distance=20, prominence=rolling_noise)
+        roll_troughs, _ = find_peaks(-rolling_signal.values, distance=20, prominence=rolling_noise)
+        
+        # Find the latest peak and trough in this window (confirmed ones only)
+        confirmed_peaks = [idx for idx in roll_peaks if idx < len(rolling_signal) - confirmation_days]
+        confirmed_troughs = [idx for idx in roll_troughs if idx < len(rolling_signal) - confirmation_days]
+        
+        current_peak = rolling_signal.index[confirmed_peaks[-1]] if confirmed_peaks else None
+        current_trough = rolling_signal.index[confirmed_troughs[-1]] if confirmed_troughs else None
+        
+        # Track evolution of "latest peak"
+        if current_peak is not None:
+            if last_peak_detected is not None and current_peak != last_peak_detected:
+                # The "latest peak" has changed - archive the old one as grey
+                if last_peak_detected not in [d for d, _ in historical_detections]:
+                    historical_detections.append((last_peak_detected, "peak"))
+            last_peak_detected = current_peak
+        
+        # Track evolution of "latest trough"
+        if current_trough is not None:
+            if last_trough_detected is not None and current_trough != last_trough_detected:
+                # The "latest trough" has changed - archive the old one as grey
+                if last_trough_detected not in [d for d, _ in historical_detections]:
+                    historical_detections.append((last_trough_detected, "trough"))
+            last_trough_detected = current_trough
+    
+    historical_detections.sort(key=lambda x: x[0])
+
     decay_values = [0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70]
     summary_rows = []
     for d_frac in decay_values:
@@ -471,6 +553,16 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     peak_dates = [t for t, typ in inflexions if typ == "peak"]
     trough_dates = [t for t, typ in inflexions if typ == "trough"]
 
+    # Plot historical detections (grey arrows)
+    hist_peak_dates = [t for t, typ in historical_detections if typ == "peak"]
+    hist_trough_dates = [t for t, typ in historical_detections if typ == "trough"]
+    
+    if hist_peak_dates:
+        ax2.scatter(hist_peak_dates, signal.loc[hist_peak_dates], marker="v", color="grey", s=90, zorder=4, alpha=0.35, label="Historical Peak")
+    if hist_trough_dates:
+        ax2.scatter(hist_trough_dates, signal.loc[hist_trough_dates], marker="^", color="grey", s=90, zorder=4, alpha=0.35, label="Historical Trough")
+
+    # Plot current inflections (colored arrows)
     if peak_dates:
         ax2.scatter(peak_dates, signal.loc[peak_dates], marker="v", color="red", s=100, label="Peak", zorder=5)
     if trough_dates:
@@ -557,4 +649,3 @@ st.divider()
 render_ma_retracement_dashboard_streamlit(mr_lookback, int(mr_ma_window), visual_choice, MR_MIN_GAP_DAYS, MR_RETRACE_LEVELS)
 st.divider()
 render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma)
-
