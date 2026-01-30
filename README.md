@@ -71,7 +71,9 @@ Key outputs:
 ## Data Requirements
 
 The Excel file must be named:
-- `Brent_WTI_long_data_tidy.xlsx`
+- `Brent_WTI_C1.xlsx`
+- `Brent_WTI_C2.xlsx`
+- `Brent_WTI_C3.xlsx`
 
 And contain columns in this order:
 1. `Timestamp`
