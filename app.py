@@ -25,9 +25,24 @@ def load_data(path: str) -> pd.DataFrame:
     df_base["Timestamp"] = pd.to_datetime(df_base["Timestamp"])
     df_base = df_base.sort_values("Timestamp").reset_index(drop=True)
     return df_base
+tab_config = {
+    "C1": "Brent_WTI_C1.xlsx",
+    "C2": "Brent_WTI_C2.xlsx",
+    "C3": "Brent_WTI_C3.xlsx",
+}
 
-DATA_PATH = "Brent_WTI_long_data_tidy.xlsx"
+contract_col1, contract_col2 = st.columns([1, 6])
+with contract_col1:
+    selected_contract = st.selectbox(
+        "Contract",
+        options=["C1", "C2", "C3"],
+        index=0,
+    )
+
+DATA_PATH = tab_config[selected_contract]
 df_base = load_data(DATA_PATH)
+
+
 
 # =========================================================
 # Sidebar controls
@@ -553,7 +568,7 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     peak_dates = [t for t, typ in inflexions if typ == "peak"]
     trough_dates = [t for t, typ in inflexions if typ == "trough"]
 
-    # Plot historical detections (grey arrows)
+    # Plot historical detections 
     hist_peak_dates = [t for t, typ in historical_detections if typ == "peak"]
     hist_trough_dates = [t for t, typ in historical_detections if typ == "trough"]
     
@@ -642,10 +657,16 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     st.write("The sensitivity table measures **how many days until |Signal| shrinks to X% of its starting value** (persistence).")
 
 # =========================================================
-# Main Execution
+# Main Execution 
 # =========================================================
 render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd)
 st.divider()
-render_ma_retracement_dashboard_streamlit(mr_lookback, int(mr_ma_window), visual_choice, MR_MIN_GAP_DAYS, MR_RETRACE_LEVELS)
+render_ma_retracement_dashboard_streamlit(
+    mr_lookback,
+    int(mr_ma_window),
+    visual_choice,
+    MR_MIN_GAP_DAYS,
+    MR_RETRACE_LEVELS
+)
 st.divider()
 render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma)
