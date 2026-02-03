@@ -682,131 +682,360 @@ with tab1:
     st.divider()
     render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma, df_base)
 
+
+# =========================================================
+# Business-day helpers 
+# =========================================================
+def bdays_to_expiry(d: pd.Timestamp, expiry: pd.Timestamp) -> int:
+    """
+    Business days remaining INCLUDING expiry day.
+    So if d == expiry (and it's a business day), returns 1.
+    If d > expiry, returns 0.
+    """
+    d = pd.to_datetime(d).normalize()
+    expiry = pd.to_datetime(expiry).normalize()
+
+    if d > expiry:
+        return 0
+
+    # np.busday_count counts business days in [start, end)
+    # so use end = expiry + 1 calendar day to include expiry day
+    end = (expiry + pd.Timedelta(days=1)).date()
+    return int(np.busday_count(d.date(), end))
+
+def last_business_day_of_month(d: pd.Timestamp) -> pd.Timestamp:
+    """Last business day of d's month (weekday-only)."""
+    # go to month end, then step back to weekday
+    month_end = (d + pd.offsets.MonthEnd(0)).normalize()
+    while month_end.weekday() >= 5:  # Sat/Sun
+        month_end -= pd.Timedelta(days=1)
+    return month_end
+
+def add_business_days(d: pd.Timestamp, n: int) -> pd.Timestamp:
+    """Add n business days to date d (weekday-only)."""
+    # using pandas BDay
+    return (d + pd.offsets.BDay(n)).normalize()
+
+def subtract_business_days(d: pd.Timestamp, n: int) -> pd.Timestamp:
+    """Subtract n business days from date d (weekday-only)."""
+    return (d - pd.offsets.BDay(n)).normalize()
+
+# =========================================================
+# Expiry model 
+# =========================================================
+def brent_c1_expiry(d: pd.Timestamp) -> pd.Timestamp:
+    """
+    Brent C1 expiry = last trading day of month (weekday-only approximation).
+    """
+    return last_business_day_of_month(d)
+
+def brent_c2_expiry(d: pd.Timestamp) -> pd.Timestamp:
+    """Brent C2 expiry ~ last business day of next month."""
+    return last_business_day_of_month(d + pd.offsets.MonthBegin(1))
+
+def brent_c3_expiry(d: pd.Timestamp) -> pd.Timestamp:
+    """Brent C3 expiry ~ last business day of month after next."""
+    return last_business_day_of_month(d + pd.offsets.MonthBegin(2))
+
+def wti_c1_expiry(d: pd.Timestamp) -> pd.Timestamp:
+    """
+    WTI C1 expiry:
+    3 trading days before the 25th of the month
+    preceding the delivery month.
+
+    Assumption:
+    - WTI front-month delivery = d + 2 calendar months
+    """
+    delivery_month = (d + pd.offsets.MonthBegin(2)).normalize()
+    expiry_ref = delivery_month - pd.offsets.MonthBegin(1)  # preceding month
+    day25 = pd.Timestamp(
+        year=expiry_ref.year,
+        month=expiry_ref.month,
+        day=25
+    )
+    return subtract_business_days(day25, 3)
+
+
+def wti_c2_expiry(d: pd.Timestamp) -> pd.Timestamp:
+    """
+    WTI C2 expiry = same rule, one month further out
+    """
+    delivery_month = (d + pd.offsets.MonthBegin(3)).normalize()
+    expiry_ref = delivery_month - pd.offsets.MonthBegin(1)
+    day25 = pd.Timestamp(
+        year=expiry_ref.year,
+        month=expiry_ref.month,
+        day=25
+    )
+    return subtract_business_days(day25, 3)
+
+# =========================================================
+# Solve integer Brent allocation given fixed W lots and B1 schedule
+# =========================================================
+def solve_two_tenor_integer(total_brent: int, Tb1: int, Tb2: int, target_exposure: int):
+    """
+    Solve b1 + b2 = total_brent
+          b1*Tb1 + b2*Tb2 = target_exposure
+    Return (b1, b2) integers.
+    """
+    if Tb2 == Tb1:
+        # Degenerate: just split
+        return total_brent, 0
+
+    # b2 = (target - total*Tb1)/(Tb2-Tb1)
+    b2 = (target_exposure - total_brent * Tb1) / (Tb2 - Tb1)
+    b2 = int(np.round(b2))
+    b2 = int(np.clip(b2, 0, total_brent))
+    b1 = total_brent - b2
+    return b1, b2
+
+def solve_b2_b3_given_b1_integer(total_brent: int, b1: int, Tb1: int, Tb2: int, Tb3: int, target_exposure: int):
+    """
+    Given b1 is fixed, solve:
+      b2 + b3 = total_brent - b1
+      b1*Tb1 + b2*Tb2 + b3*Tb3 = target_exposure
+
+    Return integer (b2, b3).
+    """
+    rem = total_brent - b1
+    if rem < 0:
+        return 0, 0
+
+    # Need: b2*Tb2 + b3*Tb3 = target_exposure - b1*Tb1
+    rhs = target_exposure - b1 * Tb1
+
+    if Tb3 == Tb2:
+        # Degenerate: allocate all to B2
+        b3 = 0
+        b2 = rem
+        return b2, b3
+
+    # Substitute b2 = rem - b3:
+    # (rem - b3)*Tb2 + b3*Tb3 = rhs
+    # rem*Tb2 + b3*(Tb3 - Tb2) = rhs
+    b3 = (rhs - rem * Tb2) / (Tb3 - Tb2)
+    b3 = int(np.round(b3))
+    b3 = int(np.clip(b3, 0, rem))
+    b2 = rem - b3
+    return b2, b3
+
+# =========================================================
+# Main: build daily lots schedule using your rollover logic
+# =========================================================
+def build_lots_schedule(dates: pd.Series, total_brent: int, total_wti: int,
+                        roll_days: int = 5):
+    """
+    For each date:
+    - compute Tb1,Tb2,Tb3,Tw1,Tw2 via calendar proxies
+    - For each MONTH:
+        * on the first available trading date in that month: compute baseline B1/B2 (B3=0), W1=total_wti
+        * HOLD baseline until rollover window starts (T-roll_days ... T-1 relative to Brent C1 expiry)
+        * During rollover window:
+            - each day: roll W1 -> W2 by total_wti/roll_days lots per day (must divide evenly)
+            - reduce B1 by baseline_B1/roll_days lots per day (assume baseline_B1==roll_days in your example; we implement general)
+            - recompute B2/B3 each day to match time exposure
+        * After Brent expiry: relabel next month naturally via using new month baseline
+    Returns DataFrame with columns:
+      Timestamp, Tb1,Tb2,Tb3,Tw1,Tw2, B1,B2,B3,W1,W2
+    """
+    df = pd.DataFrame({"Timestamp": pd.to_datetime(dates).dt.normalize()}).drop_duplicates().sort_values("Timestamp")
+    df["month"] = df["Timestamp"].dt.to_period("M")
+
+    # compute expiry dates & time-to-expiry (weekday-only)
+    df["B1_exp"] = df["Timestamp"].apply(brent_c1_expiry)
+    df["B2_exp"] = df["Timestamp"].apply(brent_c2_expiry)
+    df["B3_exp"] = df["Timestamp"].apply(brent_c3_expiry)
+    df["W1_exp"] = df["Timestamp"].apply(wti_c1_expiry)
+    df["W2_exp"] = df["Timestamp"].apply(wti_c2_expiry)
+
+    df["Tb1"] = df.apply(lambda r: bdays_to_expiry(r["Timestamp"], r["B1_exp"]), axis=1)
+    df["Tb2"] = df.apply(lambda r: bdays_to_expiry(r["Timestamp"], r["B2_exp"]), axis=1)
+    df["Tb3"] = df.apply(lambda r: bdays_to_expiry(r["Timestamp"], r["B3_exp"]), axis=1)
+    df["Tw1"] = df.apply(lambda r: bdays_to_expiry(r["Timestamp"], r["W1_exp"]), axis=1)
+    df["Tw2"] = df.apply(lambda r: bdays_to_expiry(r["Timestamp"], r["W2_exp"]), axis=1)
+
+
+    # allocate lots columns
+    df[["B1","B2","B3","W1","W2"]] = 0
+
+    # sanity: require clean integer daily roll for WTI
+    if total_wti % roll_days != 0:
+        raise ValueError(f"total_wti must be divisible by roll_days. Got total_wti={total_wti}, roll_days={roll_days}")
+    w_roll_per_day = total_wti // roll_days
+
+    # per-month logic
+    for m, g in df.groupby("month", sort=True):
+        idx = g.index
+        if len(idx) == 0:
+            continue
+
+        # baseline computed on first trading date we have for that month in the dataset
+        first_i = idx[0]
+        Tb1_0 = int(df.loc[first_i, "Tb1"])
+        Tb2_0 = int(df.loc[first_i, "Tb2"])
+        Tw1_0 = int(df.loc[first_i, "Tw1"])
+
+        target0 = total_wti * Tw1_0
+
+        # baseline: two-tenor Brent (B3=0), W1=total_wti
+        b1_0, b2_0 = solve_two_tenor_integer(total_brent, Tb1_0, Tb2_0, target0)
+        b3_0 = 0
+
+        # we will reduce B1 linearly to 0 over roll_days (like your example)
+        if b1_0 % roll_days != 0:
+            # still handle it by rounding daily decrement but keep integer
+            b1_roll_per_day = b1_0 / roll_days
+        else:
+            b1_roll_per_day = b1_0 // roll_days
+
+        # identify rollover window: last roll_days business days BEFORE Brent expiry
+        # approximate by using Tb1 (time-to-expiry) == roll_days..1
+        # (i.e., T-5 => Tb1=5, ..., T-1 => Tb1=1)
+        for i in idx:
+            Tb1 = int(df.loc[i, "Tb1"])
+            Tb2 = int(df.loc[i, "Tb2"])
+            Tb3 = int(df.loc[i, "Tb3"])
+            Tw1 = int(df.loc[i, "Tw1"])
+            Tw2 = int(df.loc[i, "Tw2"])
+
+            # default: hold baseline
+            B1 = b1_0
+            W2 = 0
+
+            # rollover window: Tb1 in [roll_days..1]
+            if 1 <= Tb1 <= roll_days:
+                step = roll_days - Tb1 + 1  # Tb1=5 -> step=1, ..., Tb1=1 -> step=5
+                # WTI rolls
+                W2 = min(total_wti, step * w_roll_per_day)
+                W1 = total_wti - W2
+
+                # Brent B1 decays to 0
+                # use proportional decay from baseline b1_0
+                # B1 at step k = round(b1_0 * (1 - k/roll_days))
+                B1 = int(np.round(b1_0 * (1 - step / roll_days)))
+                B1 = int(np.clip(B1, 0, total_brent))
+
+                # match time exposure
+                target = W1 * Tw1 + W2 * Tw2
+                B2, B3 = solve_b2_b3_given_b1_integer(total_brent, B1, Tb1, Tb2, Tb3, target)
+
+                df.loc[i, ["B1","B2","B3","W1","W2"]] = [B1, B2, B3, W1, W2]
+            else:
+                # hold baseline (W1 full)
+                df.loc[i, ["B1","B2","B3","W1","W2"]] = [b1_0, b2_0, b3_0, total_wti, 0]
+
+    return df.drop(columns=["month"])
+
 # =========================================================
 # TAB 2: WEIGHTED SPREAD TRADING
 # =========================================================
 with tab2:
-    st.subheader("Weighted Spread Configuration")
-    
-    # Input fields for contract weights
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        brent_c1_weight = st.number_input(
-            "Brent C1 Contracts", min_value=0, max_value=100, value=1, step=1, key="brent_c1"
-        )
-    with col2:
-        brent_c2_weight = st.number_input(
-            "Brent C2 Contracts", min_value=0, max_value=100, value=0, step=1, key="brent_c2"
-        )
-    with col3:
-        brent_c3_weight = st.number_input(
-            "Brent C3 Contracts", min_value=0, max_value=100, value=0, step=1, key="brent_c3"
-        )
-    with col4:
-        wti_c1_weight = st.number_input(
-            "WTI C1 Contracts", min_value=0, max_value=100, value=1, step=1, key="wti_c1"
-        )
-    with col5:
-        wti_c2_weight = st.number_input(
-            "WTI C2 Contracts", min_value=0, max_value=100, value=0, step=1, key="wti_c2"
-        )
-    
-    # Load all contract data
+    st.subheader("Weighted Spread Trading")
+
+    # ---- Inputs: lots only ----
+    cA, cB, cC = st.columns(3)
+    with cA:
+        total_brent = st.number_input("Total Brent lots", min_value=1, max_value=200, value=20, step=1)
+    with cB:
+        total_wti = st.number_input("Total WTI lots", min_value=1, max_value=200, value=20, step=1)
+    with cC:
+        roll_days = st.number_input("Rollover window", min_value=1, max_value=10, value=5, step=1)
+
+    # ---- Load contract data ----
     df_c1 = load_data(tab_config["C1"])
     df_c2 = load_data(tab_config["C2"])
     df_c3 = load_data(tab_config["C3"])
-    
-    # Calculate weighted prices
-    def calculate_weighted_spread(df_c1, df_c2, df_c3, b1, b2, b3, w1, w2):
-        """
-        Calculate weighted spread: (WTI weighted avg) - (Brent weighted avg)
-        """
-        # Merge all dataframes on Timestamp
-        df = df_c1[["Timestamp"]].copy()
-        
-        # Add Brent prices with contract suffixes
-        df = df.merge(df_c1[["Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE"]], 
-                      on="Timestamp", how="left", suffixes=("", "_C1"))
-        df = df.merge(df_c2[["Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE"]], 
-                      on="Timestamp", how="left", suffixes=("", "_C2"))
-        df = df.merge(df_c3[["Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE"]], 
-                      on="Timestamp", how="left", suffixes=("", "_C3"))
-        
-        # Rename C1 columns 
-        df = df.rename(columns={
-            "Brent_OPEN": "Brent_OPEN_C1",
-            "Brent_HIGH": "Brent_HIGH_C1",
-            "Brent_LOW": "Brent_LOW_C1",
-            "Brent_CLOSE": "Brent_CLOSE_C1"
-        })
-        
-        # Add WTI prices
-        df = df.merge(df_c1[["Timestamp", "WTI_OPEN", "WTI_HIGH", "WTI_LOW", "WTI_CLOSE"]], 
-                      on="Timestamp", how="left", suffixes=("", "_C1"))
-        df = df.merge(df_c2[["Timestamp", "WTI_OPEN", "WTI_HIGH", "WTI_LOW", "WTI_CLOSE"]], 
-                      on="Timestamp", how="left", suffixes=("", "_C2"))
-        
-        # Rename WTI C1 columns
-        df = df.rename(columns={
-            "WTI_OPEN": "WTI_OPEN_C1",
-            "WTI_HIGH": "WTI_HIGH_C1",
-            "WTI_LOW": "WTI_LOW_C1",
-            "WTI_CLOSE": "WTI_CLOSE_C1"
-        })
-        
-        # Calculate total weights
-        total_brent = b1 + b2 + b3
-        total_wti = w1 + w2
-        
-        if total_brent == 0 or total_wti == 0:
-            st.error("Total Brent and WTI weights must be greater than 0")
-            return None
-        
-        # Calculate weighted Brent prices
-        df["Brent_OPEN"] = (b1 * df["Brent_OPEN_C1"] + b2 * df["Brent_OPEN_C2"] + b3 * df["Brent_OPEN_C3"]) / total_brent
-        df["Brent_HIGH"] = (b1 * df["Brent_HIGH_C1"] + b2 * df["Brent_HIGH_C2"] + b3 * df["Brent_HIGH_C3"]) / total_brent
-        df["Brent_LOW"] = (b1 * df["Brent_LOW_C1"] + b2 * df["Brent_LOW_C2"] + b3 * df["Brent_LOW_C3"]) / total_brent
-        df["Brent_CLOSE"] = (b1 * df["Brent_CLOSE_C1"] + b2 * df["Brent_CLOSE_C2"] + b3 * df["Brent_CLOSE_C3"]) / total_brent
-        
-        # Calculate weighted WTI prices
-        df["WTI_OPEN"] = (w1 * df["WTI_OPEN_C1"] + w2 * df["WTI_OPEN_C2"]) / total_wti
-        df["WTI_HIGH"] = (w1 * df["WTI_HIGH_C1"] + w2 * df["WTI_HIGH_C2"]) / total_wti
-        df["WTI_LOW"] = (w1 * df["WTI_LOW_C1"] + w2 * df["WTI_LOW_C2"]) / total_wti
-        df["WTI_CLOSE"] = (w1 * df["WTI_CLOSE_C1"] + w2 * df["WTI_CLOSE_C2"]) / total_wti
-        
-        # Keep only the final columns
-        df = df[["Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE",
-                 "WTI_OPEN", "WTI_HIGH", "WTI_LOW", "WTI_CLOSE"]]
-        
-        return df
-    
-    df_base_weighted = calculate_weighted_spread(
-        df_c1, df_c2, df_c3,
-        brent_c1_weight, brent_c2_weight, brent_c3_weight,
-        wti_c1_weight, wti_c2_weight
-    )
-    
-    if df_base_weighted is not None:
-        # Display weight summary
-        st.info(
-            f"**Weighted Spread Formula:** "
-            f"[{wti_c1_weight}×WTI_C1 + {wti_c2_weight}×WTI_C2] / {wti_c1_weight + wti_c2_weight} - "
-            f"[{brent_c1_weight}×Brent_C1 + {brent_c2_weight}×Brent_C2 + {brent_c3_weight}×Brent_C3] / "
-            f"{brent_c1_weight + brent_c2_weight + brent_c3_weight}"
-        )
 
-        
-        st.divider()
-        
-        render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd, df_base_weighted)
-        st.divider()
-        render_ma_retracement_dashboard_streamlit(
-            mr_lookback,
-            int(mr_ma_window),
-            visual_choice,
-            MR_MIN_GAP_DAYS,
-            MR_RETRACE_LEVELS,
-            df_base=df_base_weighted
-        )
-        st.divider()
-        render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma, df_base_weighted)
+    # ---- Merge all prices on Timestamp ----
+    # Brent prices by tenor (C1,C2,C3)
+    base = df_c1[["Timestamp"]].copy()
+
+    base = base.merge(
+        df_c1[["Timestamp","Brent_OPEN","Brent_HIGH","Brent_LOW","Brent_CLOSE","WTI_OPEN","WTI_HIGH","WTI_LOW","WTI_CLOSE"]],
+        on="Timestamp", how="left"
+    ).rename(columns={
+        "Brent_OPEN":"Brent_OPEN_C1","Brent_HIGH":"Brent_HIGH_C1","Brent_LOW":"Brent_LOW_C1","Brent_CLOSE":"Brent_CLOSE_C1",
+        "WTI_OPEN":"WTI_OPEN_C1","WTI_HIGH":"WTI_HIGH_C1","WTI_LOW":"WTI_LOW_C1","WTI_CLOSE":"WTI_CLOSE_C1",
+    })
+
+    base = base.merge(
+        df_c2[["Timestamp","Brent_OPEN","Brent_HIGH","Brent_LOW","Brent_CLOSE","WTI_OPEN","WTI_HIGH","WTI_LOW","WTI_CLOSE"]],
+        on="Timestamp", how="left"
+    ).rename(columns={
+        "Brent_OPEN":"Brent_OPEN_C2","Brent_HIGH":"Brent_HIGH_C2","Brent_LOW":"Brent_LOW_C2","Brent_CLOSE":"Brent_CLOSE_C2",
+        "WTI_OPEN":"WTI_OPEN_C2","WTI_HIGH":"WTI_HIGH_C2","WTI_LOW":"WTI_LOW_C2","WTI_CLOSE":"WTI_CLOSE_C2",
+    })
+
+    base = base.merge(
+        df_c3[["Timestamp","Brent_OPEN","Brent_HIGH","Brent_LOW","Brent_CLOSE"]],
+        on="Timestamp", how="left"
+    ).rename(columns={
+        "Brent_OPEN":"Brent_OPEN_C3","Brent_HIGH":"Brent_HIGH_C3","Brent_LOW":"Brent_LOW_C3","Brent_CLOSE":"Brent_CLOSE_C3",
+    })
+
+    base["Timestamp"] = pd.to_datetime(base["Timestamp"]).dt.normalize()
+    base = base.sort_values("Timestamp").reset_index(drop=True)
+
+    # ---- Build lots schedule for ALL historical dates ----
+    try:
+        lots_df = build_lots_schedule(base["Timestamp"], total_brent=int(total_brent), total_wti=int(total_wti), roll_days=int(roll_days))
+    except Exception as e:
+        st.error(f"Lots schedule error: {e}")
+        st.stop()
+
+    # ---- Join lots onto prices ----
+    dfw = base.merge(lots_df[["Timestamp","Tb1","Tb2","Tb3","Tw1","Tw2","B1","B2","B3","W1","W2"]], on="Timestamp", how="left")
+
+    # ---- Compute weighted OHLC using lots as weights ----
+    def wavg3(a1, a2, a3, w1, w2, w3):
+        denom = (w1 + w2 + w3)
+        return np.where(denom == 0, np.nan, (w1*a1 + w2*a2 + w3*a3) / denom)
+
+    def wavg2(a1, a2, w1, w2):
+        denom = (w1 + w2)
+        return np.where(denom == 0, np.nan, (w1*a1 + w2*a2) / denom)
+
+    # Brent weighted (B1,B2,B3)
+    dfw["Brent_OPEN"]  = wavg3(dfw["Brent_OPEN_C1"],  dfw["Brent_OPEN_C2"],  dfw["Brent_OPEN_C3"],  dfw["B1"], dfw["B2"], dfw["B3"])
+    dfw["Brent_HIGH"]  = wavg3(dfw["Brent_HIGH_C1"],  dfw["Brent_HIGH_C2"],  dfw["Brent_HIGH_C3"],  dfw["B1"], dfw["B2"], dfw["B3"])
+    dfw["Brent_LOW"]   = wavg3(dfw["Brent_LOW_C1"],   dfw["Brent_LOW_C2"],   dfw["Brent_LOW_C3"],   dfw["B1"], dfw["B2"], dfw["B3"])
+    dfw["Brent_CLOSE"] = wavg3(dfw["Brent_CLOSE_C1"], dfw["Brent_CLOSE_C2"], dfw["Brent_CLOSE_C3"], dfw["B1"], dfw["B2"], dfw["B3"])
+
+    # WTI weighted (W1,W2)
+    dfw["WTI_OPEN"]  = wavg2(dfw["WTI_OPEN_C1"],  dfw["WTI_OPEN_C2"],  dfw["W1"], dfw["W2"])
+    dfw["WTI_HIGH"]  = wavg2(dfw["WTI_HIGH_C1"],  dfw["WTI_HIGH_C2"],  dfw["W1"], dfw["W2"])
+    dfw["WTI_LOW"]   = wavg2(dfw["WTI_LOW_C1"],   dfw["WTI_LOW_C2"],   dfw["W1"], dfw["W2"])
+    dfw["WTI_CLOSE"] = wavg2(dfw["WTI_CLOSE_C1"], dfw["WTI_CLOSE_C2"], dfw["W1"], dfw["W2"])
+
+    df_base_weighted = dfw[["Timestamp","Brent_OPEN","Brent_HIGH","Brent_LOW","Brent_CLOSE",
+                            "WTI_OPEN","WTI_HIGH","WTI_LOW","WTI_CLOSE"]].dropna().copy()
+
+    # ---- Display lots + exposure check (latest date) ----
+    last = dfw.dropna(subset=["B1","B2","B3","W1","W2"]).iloc[-1]
+    br_expo = int(last["B1"]*last["Tb1"] + last["B2"]*last["Tb2"] + last["B3"]*last["Tb3"])
+    wt_expo = int(last["W1"]*last["Tw1"] + last["W2"]*last["Tw2"])
+
+    st.info(
+        f"Latest lots @ {pd.Timestamp(last['Timestamp']).strftime('%Y-%m-%d')}:  "
+        f"B1={int(last['B1'])}, B2={int(last['B2'])}, B3={int(last['B3'])} | "
+        f"W1={int(last['W1'])}, W2={int(last['W2'])}  "
+        f"|| Exposure: Brent={br_expo}, WTI={wt_expo}"
+    )
+
+    with st.expander("Show lots schedule (last 60 rows)"):
+        show_cols = ["Timestamp","Tb1","Tb2","Tb3","Tw1","Tw2","B1","B2","B3","W1","W2"]
+        st.dataframe(dfw[show_cols].tail(60), use_container_width=True)
+
+    st.divider()
+    render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd, df_base_weighted)
+    st.divider()
+    render_ma_retracement_dashboard_streamlit(
+        mr_lookback,
+        int(mr_ma_window),
+        visual_choice,
+        MR_MIN_GAP_DAYS,
+        MR_RETRACE_LEVELS,
+        df_base=df_base_weighted
+    )
+    st.divider()
+    render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma, df_base_weighted)
