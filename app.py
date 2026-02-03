@@ -691,15 +691,25 @@ with tab2:
     # Input fields for contract weights
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        brent_c1_weight = st.number_input("Brent C1 Contracts", min_value=0.0, max_value=100.0, value=1.0, step=0.1, key="brent_c1")
+        brent_c1_weight = st.number_input(
+            "Brent C1 Contracts", min_value=0, max_value=100, value=1, step=1, key="brent_c1"
+        )
     with col2:
-        brent_c2_weight = st.number_input("Brent C2 Contracts", min_value=0.0, max_value=100.0, value=0.0, step=0.1, key="brent_c2")
+        brent_c2_weight = st.number_input(
+            "Brent C2 Contracts", min_value=0, max_value=100, value=0, step=1, key="brent_c2"
+        )
     with col3:
-        brent_c3_weight = st.number_input("Brent C3 Contracts", min_value=0.0, max_value=100.0, value=0.0, step=0.1, key="brent_c3")
+        brent_c3_weight = st.number_input(
+            "Brent C3 Contracts", min_value=0, max_value=100, value=0, step=1, key="brent_c3"
+        )
     with col4:
-        wti_c1_weight = st.number_input("WTI C1 Contracts", min_value=0.0, max_value=100.0, value=1.0, step=0.1, key="wti_c1")
+        wti_c1_weight = st.number_input(
+            "WTI C1 Contracts", min_value=0, max_value=100, value=1, step=1, key="wti_c1"
+        )
     with col5:
-        wti_c2_weight = st.number_input("WTI C2 Contracts", min_value=0.0, max_value=100.0, value=0.0, step=0.1, key="wti_c2")
+        wti_c2_weight = st.number_input(
+            "WTI C2 Contracts", min_value=0, max_value=100, value=0, step=1, key="wti_c2"
+        )
     
     # Load all contract data
     df_c1 = load_data(tab_config["C1"])
@@ -778,9 +788,13 @@ with tab2:
     
     if df_base_weighted is not None:
         # Display weight summary
-        st.info(f"**Weighted Spread Formula:** "
-                f"[{wti_c1_weight:.1f}×WTI_C1 + {wti_c2_weight:.1f}×WTI_C2] / {wti_c1_weight + wti_c2_weight:.1f} - "
-                f"[{brent_c1_weight:.1f}×Brent_C1 + {brent_c2_weight:.1f}×Brent_C2 + {brent_c3_weight:.1f}×Brent_C3] / {brent_c1_weight + brent_c2_weight + brent_c3_weight:.1f}")
+        st.info(
+            f"**Weighted Spread Formula:** "
+            f"[{wti_c1_weight}×WTI_C1 + {wti_c2_weight}×WTI_C2] / {wti_c1_weight + wti_c2_weight} - "
+            f"[{brent_c1_weight}×Brent_C1 + {brent_c2_weight}×Brent_C2 + {brent_c3_weight}×Brent_C3] / "
+            f"{brent_c1_weight + brent_c2_weight + brent_c3_weight}"
+        )
+
         
         st.divider()
         
