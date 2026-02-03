@@ -732,7 +732,7 @@ with tab2:
         df = df.merge(df_c3[["Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE"]], 
                       on="Timestamp", how="left", suffixes=("", "_C3"))
         
-        # Rename C1 columns (they don't get suffix in first merge)
+        # Rename C1 columns 
         df = df.rename(columns={
             "Brent_OPEN": "Brent_OPEN_C1",
             "Brent_HIGH": "Brent_HIGH_C1",
@@ -798,7 +798,6 @@ with tab2:
         
         st.divider()
         
-        # Render dashboards using the SAME unified sidebar controls
         render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd, df_base_weighted)
         st.divider()
         render_ma_retracement_dashboard_streamlit(
