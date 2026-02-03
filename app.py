@@ -11,6 +11,11 @@ st.set_page_config(page_title="Brent–WTI Dashboards", layout="wide")
 st.title("Brent–WTI Dashboards")
 
 # -----------------------------
+# Tab Selection
+# -----------------------------
+tab1, tab2 = st.tabs(["Default", "Weighted"])
+
+# -----------------------------
 # Load Data
 # -----------------------------
 @st.cache_data
@@ -32,52 +37,6 @@ tab_config = {
     "C3": "Brent_WTI_C3.xlsx",
 }
 
-contract_col1, contract_col2 = st.columns([1, 6])
-with contract_col1:
-    selected_contract = st.selectbox(
-        "Contract",
-        options=["C1", "C2", "C3"],
-        index=0,
-    )
-
-DATA_PATH = tab_config[selected_contract]
-df_base = load_data(DATA_PATH)
-
-
-# =========================================================
-# Sidebar controls
-# =========================================================
-st.sidebar.header("1) Spread Dashboard Controls")
-lookback = st.sidebar.number_input("Lookback (Y)", min_value=1, max_value=30, value=3, step=1)
-ma_window = st.sidebar.number_input("MA Window (D)", min_value=5, max_value=400, value=50, step=5)
-
-view_map = {
-    "Close": "spread_close",
-    "High": "spread_high",
-    "Floor": "spread_WTI_low_Brent_high",
-    "Ceiling": "spread_WTI_high_Brent_low",
-}
-visual_label = st.sidebar.selectbox("View:", options=list(view_map.keys()), index=0)
-visual_choice = view_map[visual_label]
-
-show_ma = st.sidebar.checkbox("Show MA", value=True)
-show_ma_sd = st.sidebar.checkbox("Show MA Bands", value=True)
-
-st.sidebar.divider()
-st.sidebar.header("2) MA Retracement Dashboard Controls")
-mr_lookback = st.sidebar.number_input("MA Retracement Lookback (Y)", min_value=1, max_value=30, value=3, step=1)
-mr_ma_window = st.sidebar.number_input("MA Window for Retracement (D)", min_value=5, max_value=400, value=int(ma_window), step=5)
-
-st.sidebar.divider()
-st.sidebar.header("3) Persistence Dashboard Controls")
-p_lookback = st.sidebar.number_input("Persistence Lookback (Y)", min_value=1, max_value=30, value=3, step=1)
-fast_ma = st.sidebar.number_input("Fast MA Window", min_value=2, max_value=300, value=20, step=1)
-slow_ma = st.sidebar.number_input("Slow MA Window", min_value=5, max_value=600, value=50, step=1)
-
-# --- Fixed params ---
-MR_MIN_GAP_DAYS = 20
-MR_RETRACE_LEVELS = [0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]
-
 def add_spreads(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["spread_close"] = df["WTI_CLOSE"] - df["Brent_CLOSE"]
@@ -95,7 +54,7 @@ def build_spread_series(df: pd.DataFrame, spread_key: str) -> pd.Series:
 # =========================================================
 # 1) Spread Dashboard
 # =========================================================
-def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd):
+def render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd, df_base):
     import matplotlib.transforms as mtransforms
 
     latest_date = df_base["Timestamp"].max()
@@ -243,7 +202,8 @@ def render_ma_retracement_dashboard_streamlit(
     lookback, ma_window, visual_choice,
     min_gap_days=20,
     retrace_levels=(0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10),
-    max_forward_days=250
+    max_forward_days=250,
+    df_base=None
 ):
     latest_date = df_base["Timestamp"].max()
     cutoff_date = latest_date - pd.DateOffset(years=int(lookback))
@@ -453,7 +413,7 @@ def render_ma_retracement_dashboard_streamlit(
 # =========================================================
 # 3) Persistence Dashboard 
 # =========================================================
-def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
+def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma, df_base):
     latest_date = df_base["Timestamp"].max()
     cutoff_date = latest_date - pd.DateOffset(years=int(lookback))
     df = df_base[df_base["Timestamp"] >= cutoff_date].copy()
@@ -657,16 +617,183 @@ def render_persistence_dashboard_streamlit(lookback, fast_ma, slow_ma):
     st.write("The sensitivity table measures **how many days until |Signal| shrinks to X% of its starting value** (persistence).")
 
 # =========================================================
-# Main Execution 
+# UNIFIED SIDEBAR CONTROLS
 # =========================================================
-render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd)
-st.divider()
-render_ma_retracement_dashboard_streamlit(
-    mr_lookback,
-    int(mr_ma_window),
-    visual_choice,
-    MR_MIN_GAP_DAYS,
-    MR_RETRACE_LEVELS
-)
-st.divider()
-render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma)
+st.sidebar.header("Dashboard Controls")
+
+st.sidebar.subheader("1) Spread Dashboard Controls")
+lookback = st.sidebar.number_input("Lookback (Y)", min_value=1, max_value=30, value=3, step=1, key="lookback")
+ma_window = st.sidebar.number_input("MA Window (D)", min_value=5, max_value=400, value=50, step=5, key="ma_window")
+
+view_map = {
+    "Close": "spread_close",
+    "High": "spread_high",
+    "Floor": "spread_WTI_low_Brent_high",
+    "Ceiling": "spread_WTI_high_Brent_low",
+}
+visual_label = st.sidebar.selectbox("View:", options=list(view_map.keys()), index=0, key="view")
+visual_choice = view_map[visual_label]
+
+show_ma = st.sidebar.checkbox("Show MA", value=True, key="show_ma")
+show_ma_sd = st.sidebar.checkbox("Show MA Bands", value=True, key="show_ma_sd")
+
+st.sidebar.divider()
+st.sidebar.subheader("2) MA Retracement Dashboard Controls")
+mr_lookback = st.sidebar.number_input("MA Retracement Lookback (Y)", min_value=1, max_value=30, value=3, step=1, key="mr_lookback")
+mr_ma_window = st.sidebar.number_input("MA Window for Retracement (D)", min_value=5, max_value=400, value=int(ma_window), step=5, key="mr_ma_window")
+
+st.sidebar.divider()
+st.sidebar.subheader("3) Persistence Dashboard Controls")
+p_lookback = st.sidebar.number_input("Persistence Lookback (Y)", min_value=1, max_value=30, value=3, step=1, key="p_lookback")
+fast_ma = st.sidebar.number_input("Fast MA Window", min_value=2, max_value=300, value=20, step=1, key="fast_ma")
+slow_ma = st.sidebar.number_input("Slow MA Window", min_value=5, max_value=600, value=50, step=1, key="slow_ma")
+
+# Fixed params
+MR_MIN_GAP_DAYS = 20
+MR_RETRACE_LEVELS = [0.70, 0.60, 0.50, 0.40, 0.30, 0.20, 0.10]
+
+# =========================================================
+# TAB 1: DEFAULT
+# =========================================================
+with tab1:
+    contract_col1, contract_col2 = st.columns([1, 6])
+    with contract_col1:
+        selected_contract = st.selectbox(
+            "Contract",
+            options=["C1", "C2", "C3"],
+            index=0,
+            key="default_contract"
+        )
+
+    DATA_PATH = tab_config[selected_contract]
+    df_base = load_data(DATA_PATH)
+
+    # Render dashboards using unified sidebar controls
+    render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd, df_base)
+    st.divider()
+    render_ma_retracement_dashboard_streamlit(
+        mr_lookback,
+        int(mr_ma_window),
+        visual_choice,
+        MR_MIN_GAP_DAYS,
+        MR_RETRACE_LEVELS,
+        df_base=df_base
+    )
+    st.divider()
+    render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma, df_base)
+
+# =========================================================
+# TAB 2: WEIGHTED SPREAD TRADING
+# =========================================================
+with tab2:
+    st.subheader("Weighted Spread Configuration")
+    
+    # Input fields for contract weights
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        brent_c1_weight = st.number_input("Brent C1 Contracts", min_value=0.0, max_value=100.0, value=1.0, step=0.1, key="brent_c1")
+    with col2:
+        brent_c2_weight = st.number_input("Brent C2 Contracts", min_value=0.0, max_value=100.0, value=0.0, step=0.1, key="brent_c2")
+    with col3:
+        brent_c3_weight = st.number_input("Brent C3 Contracts", min_value=0.0, max_value=100.0, value=0.0, step=0.1, key="brent_c3")
+    with col4:
+        wti_c1_weight = st.number_input("WTI C1 Contracts", min_value=0.0, max_value=100.0, value=1.0, step=0.1, key="wti_c1")
+    with col5:
+        wti_c2_weight = st.number_input("WTI C2 Contracts", min_value=0.0, max_value=100.0, value=0.0, step=0.1, key="wti_c2")
+    
+    # Load all contract data
+    df_c1 = load_data(tab_config["C1"])
+    df_c2 = load_data(tab_config["C2"])
+    df_c3 = load_data(tab_config["C3"])
+    
+    # Calculate weighted prices
+    def calculate_weighted_spread(df_c1, df_c2, df_c3, b1, b2, b3, w1, w2):
+        """
+        Calculate weighted spread: (WTI weighted avg) - (Brent weighted avg)
+        """
+        # Merge all dataframes on Timestamp
+        df = df_c1[["Timestamp"]].copy()
+        
+        # Add Brent prices with contract suffixes
+        df = df.merge(df_c1[["Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE"]], 
+                      on="Timestamp", how="left", suffixes=("", "_C1"))
+        df = df.merge(df_c2[["Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE"]], 
+                      on="Timestamp", how="left", suffixes=("", "_C2"))
+        df = df.merge(df_c3[["Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE"]], 
+                      on="Timestamp", how="left", suffixes=("", "_C3"))
+        
+        # Rename C1 columns (they don't get suffix in first merge)
+        df = df.rename(columns={
+            "Brent_OPEN": "Brent_OPEN_C1",
+            "Brent_HIGH": "Brent_HIGH_C1",
+            "Brent_LOW": "Brent_LOW_C1",
+            "Brent_CLOSE": "Brent_CLOSE_C1"
+        })
+        
+        # Add WTI prices
+        df = df.merge(df_c1[["Timestamp", "WTI_OPEN", "WTI_HIGH", "WTI_LOW", "WTI_CLOSE"]], 
+                      on="Timestamp", how="left", suffixes=("", "_C1"))
+        df = df.merge(df_c2[["Timestamp", "WTI_OPEN", "WTI_HIGH", "WTI_LOW", "WTI_CLOSE"]], 
+                      on="Timestamp", how="left", suffixes=("", "_C2"))
+        
+        # Rename WTI C1 columns
+        df = df.rename(columns={
+            "WTI_OPEN": "WTI_OPEN_C1",
+            "WTI_HIGH": "WTI_HIGH_C1",
+            "WTI_LOW": "WTI_LOW_C1",
+            "WTI_CLOSE": "WTI_CLOSE_C1"
+        })
+        
+        # Calculate total weights
+        total_brent = b1 + b2 + b3
+        total_wti = w1 + w2
+        
+        if total_brent == 0 or total_wti == 0:
+            st.error("Total Brent and WTI weights must be greater than 0")
+            return None
+        
+        # Calculate weighted Brent prices
+        df["Brent_OPEN"] = (b1 * df["Brent_OPEN_C1"] + b2 * df["Brent_OPEN_C2"] + b3 * df["Brent_OPEN_C3"]) / total_brent
+        df["Brent_HIGH"] = (b1 * df["Brent_HIGH_C1"] + b2 * df["Brent_HIGH_C2"] + b3 * df["Brent_HIGH_C3"]) / total_brent
+        df["Brent_LOW"] = (b1 * df["Brent_LOW_C1"] + b2 * df["Brent_LOW_C2"] + b3 * df["Brent_LOW_C3"]) / total_brent
+        df["Brent_CLOSE"] = (b1 * df["Brent_CLOSE_C1"] + b2 * df["Brent_CLOSE_C2"] + b3 * df["Brent_CLOSE_C3"]) / total_brent
+        
+        # Calculate weighted WTI prices
+        df["WTI_OPEN"] = (w1 * df["WTI_OPEN_C1"] + w2 * df["WTI_OPEN_C2"]) / total_wti
+        df["WTI_HIGH"] = (w1 * df["WTI_HIGH_C1"] + w2 * df["WTI_HIGH_C2"]) / total_wti
+        df["WTI_LOW"] = (w1 * df["WTI_LOW_C1"] + w2 * df["WTI_LOW_C2"]) / total_wti
+        df["WTI_CLOSE"] = (w1 * df["WTI_CLOSE_C1"] + w2 * df["WTI_CLOSE_C2"]) / total_wti
+        
+        # Keep only the final columns
+        df = df[["Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE",
+                 "WTI_OPEN", "WTI_HIGH", "WTI_LOW", "WTI_CLOSE"]]
+        
+        return df
+    
+    df_base_weighted = calculate_weighted_spread(
+        df_c1, df_c2, df_c3,
+        brent_c1_weight, brent_c2_weight, brent_c3_weight,
+        wti_c1_weight, wti_c2_weight
+    )
+    
+    if df_base_weighted is not None:
+        # Display weight summary
+        st.info(f"**Weighted Spread Formula:** "
+                f"[{wti_c1_weight:.1f}×WTI_C1 + {wti_c2_weight:.1f}×WTI_C2] / {wti_c1_weight + wti_c2_weight:.1f} - "
+                f"[{brent_c1_weight:.1f}×Brent_C1 + {brent_c2_weight:.1f}×Brent_C2 + {brent_c3_weight:.1f}×Brent_C3] / {brent_c1_weight + brent_c2_weight + brent_c3_weight:.1f}")
+        
+        st.divider()
+        
+        # Render dashboards using the SAME unified sidebar controls
+        render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd, df_base_weighted)
+        st.divider()
+        render_ma_retracement_dashboard_streamlit(
+            mr_lookback,
+            int(mr_ma_window),
+            visual_choice,
+            MR_MIN_GAP_DAYS,
+            MR_RETRACE_LEVELS,
+            df_base=df_base_weighted
+        )
+        st.divider()
+        render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma, df_base_weighted)
