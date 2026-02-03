@@ -25,6 +25,7 @@ def load_data(path: str) -> pd.DataFrame:
     df_base["Timestamp"] = pd.to_datetime(df_base["Timestamp"])
     df_base = df_base.sort_values("Timestamp").reset_index(drop=True)
     return df_base
+
 tab_config = {
     "C1": "Brent_WTI_C1.xlsx",
     "C2": "Brent_WTI_C2.xlsx",
@@ -41,7 +42,6 @@ with contract_col1:
 
 DATA_PATH = tab_config[selected_contract]
 df_base = load_data(DATA_PATH)
-
 
 
 # =========================================================
