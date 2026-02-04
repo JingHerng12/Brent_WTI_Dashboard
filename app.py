@@ -1015,16 +1015,36 @@ with tab2:
     br_expo = int(last["B1"]*last["Tb1"] + last["B2"]*last["Tb2"] + last["B3"]*last["Tb3"])
     wt_expo = int(last["W1"]*last["Tw1"] + last["W2"]*last["Tw2"])
 
-    st.info(
-        f"Latest lots @ {pd.Timestamp(last['Timestamp']).strftime('%Y-%m-%d')}:  "
+    st.markdown(
+        f"### Latest lots @ {pd.Timestamp(last['Timestamp']).strftime('%Y-%m-%d')}: "
         f"B1={int(last['B1'])}, B2={int(last['B2'])}, B3={int(last['B3'])} | "
-        f"W1={int(last['W1'])}, W2={int(last['W2'])}  "
-        f"|| Exposure: Brent={br_expo}, WTI={wt_expo}"
+        f"W1={int(last['W1'])}, W2={int(last['W2'])} "
+        f"|| **Exposure: Brent={br_expo}, WTI={wt_expo}**"
     )
 
     with st.expander("Show lots schedule (last 60 rows)"):
         show_cols = ["Timestamp","Tb1","Tb2","Tb3","Tw1","Tw2","B1","B2","B3","W1","W2"]
-        st.dataframe(dfw[show_cols].tail(60), use_container_width=True)
+        display_df = dfw[show_cols + ["Brent_CLOSE", "WTI_CLOSE"]].tail(60).copy()
+        
+        # Rename for clarity
+        display_df = display_df.rename(columns={
+            "Brent_CLOSE": "Brent_Weighted",
+            "WTI_CLOSE": "WTI_Weighted"
+        })
+        
+        # Style function with green highlight
+        def highlight_weighted(s):
+            if s.name in ['Brent_Weighted', 'WTI_Weighted']:
+                return ['background-color: #90EE90; font-weight: bold; color: #000'] * len(s)
+            return [''] * len(s)
+        
+        st.dataframe(
+            display_df.style.apply(highlight_weighted).format({
+                'Brent_Weighted': '{:.2f}',
+                'WTI_Weighted': '{:.2f}'
+            }),
+            use_container_width=True
+        )
 
     st.divider()
     render_spread_dashboard_streamlit(lookback, ma_window, visual_choice, show_ma, show_ma_sd, df_base_weighted)
