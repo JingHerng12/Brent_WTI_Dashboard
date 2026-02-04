@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import streamlit as st
 from scipy.signal import find_peaks
+from scipy.stats import skew
+import seaborn as sns 
 
 # -----------------------------
 # Page setup
@@ -13,7 +15,7 @@ st.title("Brent–WTI Dashboards")
 # -----------------------------
 # Tab Selection
 # -----------------------------
-tab1, tab2 = st.tabs(["Default", "Weighted"])
+tab1, tab2, tab3 = st.tabs(["Default", "Weighted", "Calendar"])
 
 # -----------------------------
 # Load Data
@@ -1059,3 +1061,119 @@ with tab2:
     )
     st.divider()
     render_persistence_dashboard_streamlit(p_lookback, fast_ma, slow_ma, df_base_weighted)
+    
+# =========================================================
+# TAB 3: TRADING DAY ANALYSIS 
+# =========================================================
+with tab3:
+    st.subheader("Trading Day Spread Distribution")
+
+    # --- 1. CONFIGURATION ---
+    FILE_PATH = "Brent_WTI_C1.xlsx"
+    YEARS_TO_INCLUDE = st.number_input(
+        "Lookback (Y)",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1,
+        key="td_years_simple",
+    )
+    
+
+    # --- 2. DATA PROCESSING ---
+    @st.cache_data
+    def load_and_process(path: str, years: int) -> pd.DataFrame:
+        df = pd.read_excel(path)
+        df.columns = [
+            "Timestamp", "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE",
+            "WTI_OPEN", "WTI_HIGH", "WTI_LOW", "WTI_CLOSE"
+        ]
+        df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+        df = df.sort_values("Timestamp")
+
+        cutoff = df["Timestamp"].max() - pd.DateOffset(years=int(years))
+        df = df[df["Timestamp"] >= cutoff].copy()
+
+        df["spread_close"] = df["WTI_CLOSE"] - df["Brent_CLOSE"]
+        df["Year"] = df["Timestamp"].dt.year
+        df["Month"] = df["Timestamp"].dt.month
+        df["TradingDay"] = df.groupby(["Year", "Month"])["Timestamp"].rank(method="first").astype(int)
+
+        return df
+
+    df_plot = load_and_process(FILE_PATH, int(YEARS_TO_INCLUDE))
+
+    # --- Current trading day 
+    latest_date = df_plot["Timestamp"].max()
+    current_trading_day = int(df_plot.loc[df_plot["Timestamp"] == latest_date, "TradingDay"].iloc[0])
+
+    st.markdown(
+        f"**Current Trading Day:** Day {current_trading_day} "
+        f"({latest_date.strftime('%Y-%m-%d')})"
+    )
+
+
+
+
+    # --- 3. CALCULATE STATISTICAL TABLE ---
+    stats_table = (
+        df_plot.groupby("TradingDay")["spread_close"]
+        .agg(Mean="mean", Std_Dev="std", Skewness=skew)
+        .reset_index()
+    )
+
+    stats_table["Mean"] = stats_table["Mean"].round(3)
+    stats_table["Std_Dev"] = stats_table["Std_Dev"].round(3)
+    stats_table["Skewness"] = stats_table["Skewness"].round(3)
+
+    # --- 4a. OUTPUT TABLE ---
+    st.markdown(f"### Distribution Stats (Last {int(YEARS_TO_INCLUDE)} Years)")
+    st.dataframe(stats_table, use_container_width=True)
+
+    # --- 4b. PLOT ---
+    st.markdown("### Boxplot")
+    plt.close("all")
+    fig, ax = plt.subplots(figsize=(15, 7))
+    sns.set_theme(style="whitegrid")
+
+    sns.boxplot(
+        x="TradingDay",
+        y="spread_close",
+        data=df_plot,
+        palette="Blues_d",
+        linewidth=1.2,
+        fliersize=3,
+        flierprops={"marker": "o", "markerfacecolor": "gray", "alpha": 0.4},
+        ax=ax,
+    )
+
+    ax.axhline(0, color="black", linestyle="-", linewidth=1, alpha=0.5)
+    mean_by_day = (
+    df_plot
+    .groupby("TradingDay")["spread_close"]
+    .mean()
+    .reset_index())
+
+    ax.plot(
+        mean_by_day["TradingDay"] - 1,
+        mean_by_day["spread_close"],
+        marker="o",
+        linestyle="-",
+        linewidth=1.5,
+        markersize=3,
+        color="darkblue",
+        label="Mean Spread",
+        zorder=10,)
+    
+    ax.set_title(
+        f"WTI-Brent Spread Distribution by Trading Day (Last {int(YEARS_TO_INCLUDE)} Years)",
+        fontsize=16, fontweight="bold", pad=20
+    )
+    ax.set_ylabel("Spread (WTI - Brent) $", fontsize=12)
+    ax.set_xlabel("Trading Day of Month", fontsize=12)
+
+    sns.despine(ax=ax)
+    fig.tight_layout()
+    st.pyplot(fig, use_container_width=True)
+
+    
