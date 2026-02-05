@@ -1196,7 +1196,7 @@ with tab3:
         f"Brent-WTI Spread Distribution by Trading Day (Last {int(YEARS_TO_INCLUDE)} Years)", 
         fontsize=16, fontweight="bold", pad=20
     )
-    ax.set_ylabel("Spread (WTI - Brent) $", fontsize=12)
+    ax.set_ylabel("Spread $", fontsize=12)
     ax.set_xlabel("Trading Day of Month", fontsize=12)
 
     # Add legend
