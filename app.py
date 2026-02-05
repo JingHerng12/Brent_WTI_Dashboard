@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import streamlit as st
 from scipy.signal import find_peaks
 from scipy.stats import skew
-import seaborn as sns 
+import seaborn as sns
+import matplotlib.ticker as ticker 
 
 # -----------------------------
 # Page setup
@@ -1113,8 +1114,6 @@ with tab3:
     )
 
 
-
-
     # --- 3. CALCULATE STATISTICAL TABLE ---
     stats_table = (
         df_plot.groupby("TradingDay")["spread_close"]
@@ -1136,6 +1135,15 @@ with tab3:
     fig, ax = plt.subplots(figsize=(15, 7))
     sns.set_theme(style="whitegrid")
 
+    stats = df_plot.groupby("TradingDay")["spread_close"].describe()
+    iqr = stats['75%'] - stats['25%']
+    whisker_low = (stats['25%'] - 1.5 * iqr).min()
+    whisker_high = (stats['75%'] + 1.5 * iqr).max()
+
+    # Apply limits with a small 0.25 buffer to keep whiskers clear of the edge
+    ax.set_ylim(whisker_low - 0.25, whisker_high + 0.25)
+
+    # Main Boxplot
     sns.boxplot(
         x="TradingDay",
         y="spread_close",
@@ -1143,37 +1151,57 @@ with tab3:
         palette="Blues_d",
         linewidth=1.2,
         fliersize=3,
-        flierprops={"marker": "o", "markerfacecolor": "gray", "alpha": 0.4},
+        flierprops={"marker": "o", "markerfacecolor": "gray", "alpha": 0.2},
         ax=ax,
     )
+    
+    # Calculate statistics for each trading day
+    stats_by_day = df_plot.groupby("TradingDay")["spread_close"].agg(['mean', 'std']).reset_index()
+    stats_by_day['upper_95'] = stats_by_day['mean'] + 2 * stats_by_day['std']
+    stats_by_day['lower_95'] = stats_by_day['mean'] - 2 * stats_by_day['std']
 
-    ax.axhline(0, color="black", linestyle="-", linewidth=1, alpha=0.5)
-    mean_by_day = (
-    df_plot
-    .groupby("TradingDay")["spread_close"]
-    .mean()
-    .reset_index())
+    # 95% confidence bands
+    ax.fill_between(
+        stats_by_day["TradingDay"] - 1,
+        stats_by_day['lower_95'],
+        stats_by_day['upper_95'],
+        alpha=0.15,
+        color='darkblue',
+        label='95% Range (±2σ)',
+        zorder=5
+    )
 
+    # Optional: Add lines for the boundaries
+    ax.plot(stats_by_day["TradingDay"] - 1, stats_by_day['upper_95'], 
+            linestyle='--', linewidth=1, color='blue', alpha=0.5, zorder=5)
+    ax.plot(stats_by_day["TradingDay"] - 1, stats_by_day['lower_95'], 
+            linestyle='--', linewidth=1, color='blue', alpha=0.5, zorder=5)
+    
+    ax.yaxis.set_major_locator(ticker.MultipleLocator(0.5))
+    ax.yaxis.set_minor_locator(ticker.MultipleLocator(0.1))
+    
+    # Customizing the grid to look like your image
+    ax.grid(which='major', axis='y', linestyle='-', alpha=0.3)
+    ax.grid(which='minor', axis='y', linestyle=':', alpha=0.15)
+
+    # Mean Line and Labeling
     ax.plot(
-        mean_by_day["TradingDay"] - 1,
-        mean_by_day["spread_close"],
-        marker="o",
-        linestyle="-",
-        linewidth=1.5,
-        markersize=3,
-        color="darkblue",
-        label="Mean Spread",
-        zorder=10,)
+        stats_by_day["TradingDay"] - 1, 
+        stats_by_day["mean"], 
+        marker="o", linestyle="-", linewidth=2, markersize=4, 
+        color="darkblue", label="Mean Spread", zorder=10
+    )
     
     ax.set_title(
-        f"WTI-Brent Spread Distribution by Trading Day (Last {int(YEARS_TO_INCLUDE)} Years)",
+        f"Brent-WTI Spread Distribution by Trading Day (Last {int(YEARS_TO_INCLUDE)} Years)", 
         fontsize=16, fontweight="bold", pad=20
     )
     ax.set_ylabel("Spread (WTI - Brent) $", fontsize=12)
     ax.set_xlabel("Trading Day of Month", fontsize=12)
 
+    # Add legend
+    ax.legend(loc='best', frameon=True, shadow=True)
+
     sns.despine(ax=ax)
     fig.tight_layout()
     st.pyplot(fig, use_container_width=True)
-
-    
