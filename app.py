@@ -1350,8 +1350,8 @@ with tab3:
         ax_futures.set_xticklabels(tenors, color='white')
         ax_futures.set_ylabel("Price ($/bbl)", fontsize=11, color='white')
         ax_futures.grid(True, alpha=0.15, linestyle='--', color='gray')
-        ax_futures.legend(loc='upper left', bbox_to_anchor=(0.01, 0.99), 
-                         frameon=True, shadow=False, facecolor='#1e1e1e', edgecolor='gray')
+        ax_futures.legend(loc='upper right', bbox_to_anchor=(0.99, 0.99), 
+                 frameon=True, shadow=False, facecolor='#1e1e1e', edgecolor='gray')
         ax_futures.tick_params(colors='white')
         ax_futures.spines['bottom'].set_color('gray')
         ax_futures.spines['top'].set_color('gray')
@@ -1410,8 +1410,8 @@ with tab3:
         ax_spread_curve.set_ylabel("Spread", fontsize=11, color='white')
         ax_spread_curve.axhline(0, color='white', linewidth=1.2)
         ax_spread_curve.grid(True, alpha=0.15, axis='y', color='gray', linestyle='--')
-        ax_spread_curve.legend(loc='upper left', bbox_to_anchor=(0.01, 0.99), 
-                              frameon=True, shadow=False, facecolor='#1e1e1e', edgecolor='gray')
+        ax_spread_curve.legend(loc='upper right', bbox_to_anchor=(0.99, 0.99), 
+                      frameon=True, shadow=False, facecolor='#1e1e1e', edgecolor='gray')
         ax_spread_curve.tick_params(colors='white')
         ax_spread_curve.spines['bottom'].set_color('gray')
         ax_spread_curve.spines['top'].set_color('gray')
