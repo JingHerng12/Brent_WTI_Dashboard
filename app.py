@@ -1171,7 +1171,7 @@ with tab3:
         zorder=5
     )
 
-    # Optional: Add lines for the boundaries
+    # Add lines for the boundaries
     ax.plot(stats_by_day["TradingDay"] - 1, stats_by_day['upper_95'], 
             linestyle='--', linewidth=1, color='blue', alpha=0.5, zorder=5)
     ax.plot(stats_by_day["TradingDay"] - 1, stats_by_day['lower_95'], 
@@ -1205,3 +1205,223 @@ with tab3:
     sns.despine(ax=ax)
     fig.tight_layout()
     st.pyplot(fig, use_container_width=True)
+    
+    # =========================================================
+    # CURVATURE ANALYSIS
+    # =========================================================
+    st.markdown("---")
+    st.subheader("Futures Curve Analysis")
+    
+    # --- Load multi-contract data using existing cached function ---
+    @st.cache_data
+    def load_curve_data(years: int) -> pd.DataFrame:
+        # Reuse the existing load_data function from top of script
+        df_c1 = load_data("Brent_WTI_C1.xlsx")
+        df_c2 = load_data("Brent_WTI_C2.xlsx")
+        df_c3 = load_data("Brent_WTI_C3.xlsx")
+        
+        # Apply lookback filter
+        cutoff = df_c1["Timestamp"].max() - pd.DateOffset(years=years)
+        df_c1 = df_c1[df_c1["Timestamp"] >= cutoff].copy()
+        df_c2 = df_c2[df_c2["Timestamp"] >= cutoff].copy()
+        df_c3 = df_c3[df_c3["Timestamp"] >= cutoff].copy()
+        
+        # Select only needed columns
+        df_c1_sub = df_c1[["Timestamp", "Brent_CLOSE", "WTI_CLOSE"]]
+        df_c2_sub = df_c2[["Timestamp", "Brent_CLOSE", "WTI_CLOSE"]]
+        df_c3_sub = df_c3[["Timestamp", "Brent_CLOSE", "WTI_CLOSE"]]
+        
+        # Merge
+        df = (
+            df_c1_sub.merge(df_c2_sub, on="Timestamp", suffixes=("_C1", "_C2"))
+                     .merge(df_c3_sub, on="Timestamp")
+                     .rename(columns={"Brent_CLOSE": "Brent_CLOSE_C3", "WTI_CLOSE": "WTI_CLOSE_C3"})
+        )
+        
+        need_cols = ["Brent_CLOSE_C1","Brent_CLOSE_C2","Brent_CLOSE_C3",
+                     "WTI_CLOSE_C1","WTI_CLOSE_C2","WTI_CLOSE_C3"]
+        df = df.dropna(subset=need_cols).reset_index(drop=True)
+        
+        return df
+    
+    df_curve = load_curve_data(int(YEARS_TO_INCLUDE))
+    
+    # --- Initialize session state for clear functionality ---
+    if 'compare_key_counter' not in st.session_state:
+        st.session_state.compare_key_counter = 0
+    
+    # --- Date selection controls ---
+    col1, col2, col3 = st.columns([2, 2, 1])
+    
+    with col1:
+        current_date_input = st.text_input(
+            "Current Date (YYYY-MM-DD)",
+            value=df_curve.iloc[-1]['Timestamp'].strftime('%Y-%m-%d'),
+            key="curve_current_date_input",
+            help="Enter date to view futures curve"
+        )
+    
+    with col2:
+        compare_date_input = st.text_input(
+            "Compare Date (YYYY-MM-DD)",
+            value="",
+            key=f"curve_compare_date_input_{st.session_state.compare_key_counter}",
+            help="Enter a date to overlay comparison curve"
+        )
+    
+    with col3:
+        if st.button("Clear", key="clear_curve_compare"):
+            # Increment counter to create new widget with empty value
+            st.session_state.compare_key_counter += 1
+            st.rerun()
+    
+    # --- Extract current date data ---
+    tenors = ["C1", "C2", "C3"]
+    x_pos = np.arange(len(tenors))
+    
+    # Handle current date selection
+    try:
+        target_current = pd.to_datetime(current_date_input)
+        current_idx = (df_curve['Timestamp'] - target_current).abs().idxmin()
+        row_current = df_curve.iloc[current_idx]
+        current_date = row_current['Timestamp']
+    except:
+        st.warning("Invalid current date format. Using latest date.")
+        current_idx = len(df_curve) - 1
+        row_current = df_curve.iloc[current_idx]
+        current_date = row_current['Timestamp']
+    
+    brent_current = [row_current[f"Brent_CLOSE_{c}"] for c in tenors]
+    wti_current = [row_current[f"WTI_CLOSE_{c}"] for c in tenors]
+    spread_current = [w - b for w, b in zip(wti_current, brent_current)]
+    
+    # --- Handle comparison date ---
+    show_comparison = False
+    if compare_date_input.strip():
+        try:
+            target_date = pd.to_datetime(compare_date_input)
+            compare_idx = (df_curve['Timestamp'] - target_date).abs().idxmin()
+            row_compare = df_curve.iloc[compare_idx]
+            compare_date = row_compare['Timestamp']
+            
+            brent_compare = [row_compare[f"Brent_CLOSE_{c}"] for c in tenors]
+            wti_compare = [row_compare[f"WTI_CLOSE_{c}"] for c in tenors]
+            spread_compare = [w - b for w, b in zip(wti_compare, brent_compare)]
+            
+            show_comparison = True
+        except:
+            st.warning("Invalid compare date format. Please use YYYY-MM-DD")
+    
+    # --- Display current date info ---
+    st.markdown(f"**Current Date:** {current_date.strftime('%Y-%m-%d')}")
+    if show_comparison:
+        st.markdown(f"**Compare Date:** {compare_date.strftime('%Y-%m-%d')}")
+    
+    # --- Create plots ---
+    plt.close("all")
+    
+    # Apply dark theme only for this plot using context manager
+    with plt.style.context('dark_background'):
+        fig_curve, (ax_futures, ax_spread_curve) = plt.subplots(
+            2, 1, figsize=(12, 8), 
+            gridspec_kw={'height_ratios': [2, 1]},
+            facecolor='#0e1117'
+        )
+        
+        # Set axes background color
+        ax_futures.set_facecolor('#262730')
+        ax_spread_curve.set_facecolor('#262730')
+        
+        # Plot 1: Futures Curve
+        ax_futures.plot(x_pos, brent_current, marker="o", markersize=8, 
+                       color='#00FFCC', label="Brent (Current)", linewidth=2)
+        ax_futures.plot(x_pos, wti_current, marker="s", markersize=8, 
+                       color='#FF3366', label="WTI (Current)", linewidth=2)
+        
+        if show_comparison:
+            ax_futures.plot(x_pos, brent_compare, marker="o", markersize=6, 
+                           color='#00FFCC', linewidth=1.5, linestyle='--', 
+                           alpha=0.5, label="Brent (Compare)")
+            ax_futures.plot(x_pos, wti_compare, marker="s", markersize=6, 
+                           color='#FF3366', linewidth=1.5, linestyle='--', 
+                           alpha=0.5, label="WTI (Compare)")
+        
+        ax_futures.set_xticks(x_pos)
+        ax_futures.set_xticklabels(tenors, color='white')
+        ax_futures.set_ylabel("Price ($/bbl)", fontsize=11, color='white')
+        ax_futures.grid(True, alpha=0.15, linestyle='--', color='gray')
+        ax_futures.legend(loc='upper left', bbox_to_anchor=(0.01, 0.99), 
+                         frameon=True, shadow=False, facecolor='#1e1e1e', edgecolor='gray')
+        ax_futures.tick_params(colors='white')
+        ax_futures.spines['bottom'].set_color('gray')
+        ax_futures.spines['top'].set_color('gray')
+        ax_futures.spines['left'].set_color('gray')
+        ax_futures.spines['right'].set_color('gray')
+    
+        # Plot 2: Spread Bars
+        bar_width = 0.35 if show_comparison else 0.5
+        
+        bars_current = ax_spread_curve.bar(
+            x_pos - (bar_width/2 if show_comparison else 0), 
+            spread_current, 
+            width=bar_width,
+            color=['#00FFCC' if s >= 0 else '#FF5500' for s in spread_current],
+            alpha=0.7,
+            label='Current'
+        )
+        
+        # Add value labels for current
+        for i, (bar, val) in enumerate(zip(bars_current, spread_current)):
+            ax_spread_curve.text(
+                bar.get_x() + bar.get_width()/2, 
+                val - 0.15 if val < 0 else val + 0.15,
+                f'${val:.2f}',
+                ha='center', 
+                va='top' if val < 0 else 'bottom',
+                fontsize=9,
+                fontweight='bold',
+                color='white'
+            )
+        
+        if show_comparison:
+            bars_compare = ax_spread_curve.bar(
+                x_pos + bar_width/2, 
+                spread_compare, 
+                width=bar_width,
+                color=['#888888' if s >= 0 else '#666666' for s in spread_compare],
+                alpha=0.4,
+                label='Compare'
+            )
+            
+            # Add value labels for comparison
+            for i, (bar, val) in enumerate(zip(bars_compare, spread_compare)):
+                ax_spread_curve.text(
+                    bar.get_x() + bar.get_width()/2, 
+                    val - 0.15 if val < 0 else val + 0.15,
+                    f'${val:.2f}',
+                    ha='center', 
+                    va='top' if val < 0 else 'bottom',
+                    fontsize=8,
+                    color='#cccccc'
+                )
+        
+        ax_spread_curve.set_xticks(x_pos)
+        ax_spread_curve.set_xticklabels(tenors, color='white')
+        ax_spread_curve.set_ylabel("Spread", fontsize=11, color='white')
+        ax_spread_curve.axhline(0, color='white', linewidth=1.2)
+        ax_spread_curve.grid(True, alpha=0.15, axis='y', color='gray', linestyle='--')
+        ax_spread_curve.legend(loc='upper left', bbox_to_anchor=(0.01, 0.99), 
+                              frameon=True, shadow=False, facecolor='#1e1e1e', edgecolor='gray')
+        ax_spread_curve.tick_params(colors='white')
+        ax_spread_curve.spines['bottom'].set_color('gray')
+        ax_spread_curve.spines['top'].set_color('gray')
+        ax_spread_curve.spines['left'].set_color('gray')
+        ax_spread_curve.spines['right'].set_color('gray')
+    
+        # Auto-scale y-axis for spread with top at 0
+        all_spreads = spread_current + (spread_compare if show_comparison else [])
+        s_min = min(all_spreads)
+        ax_spread_curve.set_ylim(min(s_min * 1.2, -2.0), 0.5)
+        
+        fig_curve.tight_layout()
+    st.pyplot(fig_curve, use_container_width=True)
