@@ -1130,7 +1130,6 @@ with tab3:
     st.dataframe(stats_table, use_container_width=True)
 
     # --- 4b. PLOT ---
-    st.markdown("### Boxplot")
     plt.close("all")
     fig, ax = plt.subplots(figsize=(15, 7))
     sns.set_theme(style="whitegrid")
@@ -1313,14 +1312,28 @@ with tab3:
             st.warning("Invalid compare date format. Please use YYYY-MM-DD")
     
     # --- Display current date info ---
-    st.markdown(f"**Current Date:** {current_date.strftime('%Y-%m-%d')}")
+    df_curve_with_trading_day = df_curve.copy()
+    df_curve_with_trading_day["Year"] = df_curve_with_trading_day["Timestamp"].dt.year
+    df_curve_with_trading_day["Month"] = df_curve_with_trading_day["Timestamp"].dt.month
+    df_curve_with_trading_day["TradingDay"] = df_curve_with_trading_day.groupby(
+        ["Year", "Month"]
+    )["Timestamp"].rank(method="first").astype(int)
+
+    def get_td_str(df, target_date):
+        match = df[df['Timestamp'] == target_date]
+        if not match.empty:
+            return f" (Trading Day {int(match['TradingDay'].iloc[0])})"
+        return ""
+
+    # --- Display current and compare date info with Trading Day ---
+    st.markdown(f"**Current Date:** {current_date.strftime('%Y-%m-%d')}{get_td_str(df_curve_with_trading_day, current_date)}")
+
     if show_comparison:
-        st.markdown(f"**Compare Date:** {compare_date.strftime('%Y-%m-%d')}")
+        st.markdown(f"**Compare Date:** {compare_date.strftime('%Y-%m-%d')}{get_td_str(df_curve_with_trading_day, compare_date)}")
     
     # --- Create plots ---
     plt.close("all")
     
-    # Apply dark theme only for this plot using context manager
     with plt.style.context('dark_background'):
         fig_curve, (ax_futures, ax_spread_curve) = plt.subplots(
             2, 1, figsize=(12, 8), 
@@ -1358,7 +1371,7 @@ with tab3:
         ax_futures.spines['left'].set_color('gray')
         ax_futures.spines['right'].set_color('gray')
     
-        # Plot 2: Spread Bars
+    # Plot 2: Spread Bars with Statistical Overlays
         bar_width = 0.35 if show_comparison else 0.5
         
         bars_current = ax_spread_curve.bar(
@@ -1367,7 +1380,7 @@ with tab3:
             width=bar_width,
             color=['#00FFCC' if s >= 0 else '#FF5500' for s in spread_current],
             alpha=0.7,
-            label='Current'
+            label='Current Spread'
         )
         
         # Add value labels for current
@@ -1390,7 +1403,7 @@ with tab3:
                 width=bar_width,
                 color=['#888888' if s >= 0 else '#666666' for s in spread_compare],
                 alpha=0.4,
-                label='Compare'
+                label='Compare Spread'
             )
             
             # Add value labels for comparison
@@ -1405,23 +1418,142 @@ with tab3:
                     color='#cccccc'
                 )
         
+        # --- ADD STATISTICAL OVERLAYS FOR ALL CONTRACTS ---
+        # Calculate trading day for current date
+        current_year = current_date.year
+        current_month = current_date.month
+        current_trading_day = int(df_plot[
+            (df_plot['Timestamp'].dt.year == current_year) & 
+            (df_plot['Timestamp'].dt.month == current_month) & 
+            (df_plot['Timestamp'] == current_date)
+        ]['TradingDay'].iloc[0]) if len(df_plot[
+            (df_plot['Timestamp'].dt.year == current_year) & 
+            (df_plot['Timestamp'].dt.month == current_month) & 
+            (df_plot['Timestamp'] == current_date)
+        ]) > 0 else None
+        
+        # Calculate spreads for all contracts
+        df_curve_with_trading_day["spread_C1"] = (
+            df_curve_with_trading_day["WTI_CLOSE_C1"] - df_curve_with_trading_day["Brent_CLOSE_C1"]
+        )
+        df_curve_with_trading_day["spread_C2"] = (
+            df_curve_with_trading_day["WTI_CLOSE_C2"] - df_curve_with_trading_day["Brent_CLOSE_C2"]
+        )
+        df_curve_with_trading_day["spread_C3"] = (
+            df_curve_with_trading_day["WTI_CLOSE_C3"] - df_curve_with_trading_day["Brent_CLOSE_C3"]
+        )
+        
+        if current_trading_day is not None:
+            # Loop through each contract and plot statistics
+            for i, contract in enumerate(['C1', 'C2', 'C3']):
+                day_data = df_curve_with_trading_day[
+                    df_curve_with_trading_day['TradingDay'] == current_trading_day
+                ][f'spread_{contract}']
+                
+                if len(day_data) > 0:
+                    current_mean = day_data.mean()
+                    current_std = day_data.std()
+                    current_upper_95 = current_mean + 2 * current_std
+                    current_lower_95 = current_mean - 2 * current_std
+                    
+                    # Plot mean and 95% range for current date
+                    ax_spread_curve.errorbar(
+                        x_pos[i] - (bar_width/2 if show_comparison else 0),
+                        current_mean,
+                        yerr=[[current_mean - current_lower_95], [current_upper_95 - current_mean]],
+                        fmt='D',
+                        color='#FFD700',
+                        markersize=5,
+                        capsize=6,
+                        capthick=1.5,
+                        elinewidth=1.5,   
+                        alpha=0.7,
+                        zorder=9
+                    )
+        
+        # Add statistical overlay for compare date if present
+        if show_comparison:
+            compare_year = compare_date.year
+            compare_month = compare_date.month
+            compare_trading_day = int(df_plot[
+                (df_plot['Timestamp'].dt.year == compare_year) & 
+                (df_plot['Timestamp'].dt.month == compare_month) & 
+                (df_plot['Timestamp'] == compare_date)
+            ]['TradingDay'].iloc[0]) if len(df_plot[
+                (df_plot['Timestamp'].dt.year == compare_year) & 
+                (df_plot['Timestamp'].dt.month == compare_month) & 
+                (df_plot['Timestamp'] == compare_date)
+            ]) > 0 else None
+            
+            if compare_trading_day is not None:
+                # Loop through each contract and plot statistics
+                for i, contract in enumerate(['C1', 'C2', 'C3']):
+                    compare_day_data = df_curve_with_trading_day[
+                        df_curve_with_trading_day['TradingDay'] == compare_trading_day
+                    ][f'spread_{contract}']
+                    
+                    if len(compare_day_data) > 0:
+                        compare_mean = compare_day_data.mean()
+                        compare_std = compare_day_data.std()
+                        compare_upper_95 = compare_mean + 2 * compare_std
+                        compare_lower_95 = compare_mean - 2 * compare_std
+                        
+                        # Plot mean and 95% range for compare date
+                        ax_spread_curve.errorbar(
+                            x_pos[i] + bar_width/2,
+                            compare_mean,
+                            yerr=[[compare_mean - compare_lower_95], [compare_upper_95 - compare_mean]],
+                            fmt='D',
+                            color='#FFD700',
+                            markersize=5,
+                            capsize=6,
+                            capthick=1.5,
+                            elinewidth=1.5,
+                            alpha=0.7,
+                            zorder=9
+                        )
+        
         ax_spread_curve.set_xticks(x_pos)
         ax_spread_curve.set_xticklabels(tenors, color='white')
         ax_spread_curve.set_ylabel("Spread", fontsize=11, color='white')
         ax_spread_curve.axhline(0, color='white', linewidth=1.2)
         ax_spread_curve.grid(True, alpha=0.15, axis='y', color='gray', linestyle='--')
-        ax_spread_curve.legend(loc='upper right', bbox_to_anchor=(0.99, 0.99), 
-                      frameon=True, shadow=False, facecolor='#1e1e1e', edgecolor='gray')
         ax_spread_curve.tick_params(colors='white')
         ax_spread_curve.spines['bottom'].set_color('gray')
         ax_spread_curve.spines['top'].set_color('gray')
         ax_spread_curve.spines['left'].set_color('gray')
         ax_spread_curve.spines['right'].set_color('gray')
-    
-        # Auto-scale y-axis for spread with top at 0
+
+        # Auto-scale y-axis for spread with appropriate margins
         all_spreads = spread_current + (spread_compare if show_comparison else [])
+        
+        # Include statistical ranges in y-axis calculation
+        if current_trading_day is not None:
+            for contract in ['C1', 'C2', 'C3']:
+                day_data = df_curve_with_trading_day[
+                    df_curve_with_trading_day['TradingDay'] == current_trading_day
+                ][f'spread_{contract}']
+                if len(day_data) > 0:
+                    all_spreads.extend([
+                        day_data.mean() - 2 * day_data.std(),
+                        day_data.mean() + 2 * day_data.std()
+                    ])
+        
+        if show_comparison and compare_trading_day is not None:
+            for contract in ['C1', 'C2', 'C3']:
+                compare_day_data = df_curve_with_trading_day[
+                    df_curve_with_trading_day['TradingDay'] == compare_trading_day
+                ][f'spread_{contract}']
+                if len(compare_day_data) > 0:
+                    all_spreads.extend([
+                        compare_day_data.mean() - 2 * compare_day_data.std(),
+                        compare_day_data.mean() + 2 * compare_day_data.std()
+                    ])
+        
         s_min = min(all_spreads)
-        ax_spread_curve.set_ylim(min(s_min * 1.2, -2.0), 0.5)
+        s_max = max(all_spreads)
+        margin = (s_max - s_min) * 0.15
+        ax_spread_curve.set_ylim(s_min - margin, s_max + margin)
         
         fig_curve.tight_layout()
     st.pyplot(fig_curve, use_container_width=True)
