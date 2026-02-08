@@ -5,7 +5,8 @@ import streamlit as st
 from scipy.signal import find_peaks
 from scipy.stats import skew
 import seaborn as sns
-import matplotlib.ticker as ticker 
+import matplotlib.ticker as ticker
+from pathlib import Path 
 
 # -----------------------------
 # Page setup
@@ -21,23 +22,41 @@ tab1, tab2, tab3 = st.tabs(["Default", "Weighted", "Calendar"])
 # -----------------------------
 # Load Data
 # -----------------------------
+BASE_DIR = Path(__file__).resolve().parent
+
+def resolve_path(path: str | Path) -> Path:
+    """
+    Resolve file paths reliably across:
+    - Local runs
+    - Streamlit Cloud
+    - VS Code / Dev Containers
+    """
+    p = Path(path)
+    return p if p.is_absolute() else BASE_DIR / p
 @st.cache_data
-def load_data(path: str) -> pd.DataFrame:
+def load_data(path: str | Path) -> pd.DataFrame:
+    path = resolve_path(path)
+
+    if not path.exists():
+        st.error(f"Data file not found: {path}")
+        st.stop()
+
     df_base = pd.read_excel(path)
-    columns = [
+
+    df_base.columns = [
         "Timestamp",
         "Brent_OPEN", "Brent_HIGH", "Brent_LOW", "Brent_CLOSE",
         "WTI_OPEN", "WTI_HIGH", "WTI_LOW", "WTI_CLOSE",
     ]
-    df_base.columns = columns
+
     df_base["Timestamp"] = pd.to_datetime(df_base["Timestamp"])
     df_base = df_base.sort_values("Timestamp").reset_index(drop=True)
     return df_base
 
 tab_config = {
-    "C1": "Brent_WTI_C1.xlsx",
-    "C2": "Brent_WTI_C2.xlsx",
-    "C3": "Brent_WTI_C3.xlsx",
+    "C1": resolve_path("Brent_WTI_C1.xlsx"),
+    "C2": resolve_path("Brent_WTI_C2.xlsx"),
+    "C3": resolve_path("Brent_WTI_C3.xlsx"),
 }
 
 def add_spreads(df: pd.DataFrame) -> pd.DataFrame:
