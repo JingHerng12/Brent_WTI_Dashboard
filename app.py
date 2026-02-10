@@ -258,7 +258,7 @@ def render_ma_retracement_dashboard_streamlit(
 
     # --- Snapshot-based detection for historical grey arrows ---
     confirmation_days = 5
-    check_interval = 1  # Check every 5 days
+    check_interval = 1  # Check every day
     historical_detections = []  # Store superseded "latest" inflections
     
     last_peak_detected = None
@@ -301,7 +301,7 @@ def render_ma_retracement_dashboard_streamlit(
     
     historical_detections.sort(key=lambda x: x[0])
 
-    # --- Sensitivity table ---
+    # --- Sensitivity table with FIXED retracement logic ---
     summary_rows = []
     for lvl in list(retrace_levels):
         days_list, move_list = [], []
@@ -313,7 +313,15 @@ def render_ma_retracement_dashboard_streamlit(
             for d, (t1, a1) in enumerate(future.items(), start=1):
                 if pd.isna(a1):
                     continue
+                
+                # Check if retraced to target level
                 if abs(float(a1)) <= float(lvl) * abs(float(a0)):
+                    days_list.append(d)
+                    move_list.append(abs(float(s.loc[t1]) - float(s.loc[t0])))
+                    break
+                
+                #  Also check if amplitude crossed zero (hit the MA)
+                if (a0 > 0 and a1 < 0) or (a0 < 0 and a1 > 0):
                     days_list.append(d)
                     move_list.append(abs(float(s.loc[t1]) - float(s.loc[t0])))
                     break
@@ -384,9 +392,17 @@ def render_ma_retracement_dashboard_streamlit(
             for t1, a1 in future_lat.items():
                 if pd.isna(a1):
                     continue
+                
+                # Check if retraced to target level
                 if abs(float(a1)) <= float(lvl) * abs(float(a0_lat)):
                     target_display = f"${float(s.loc[t1]):.2f} ({pd.Timestamp(t1).strftime('%Y-%m-%d')})"
                     break
+                
+                # Also check if amplitude crossed zero (hit the MA)
+                if (a0_lat > 0 and a1 < 0) or (a0_lat < 0 and a1 > 0):
+                    target_display = f"${float(s.loc[t1]):.2f} ({pd.Timestamp(t1).strftime('%Y-%m-%d')})"
+                    break
+                    
             inflex_data.append([f"{retrace_pct}% Level", target_display])
 
         inflex_ax = fig.add_axes([0.80, 0.58, 0.19, 0.37])
@@ -429,7 +445,7 @@ def render_ma_retracement_dashboard_streamlit(
 
     st.markdown("### Interpretation")
     st.write("**Amplitude = Spread − MA.** Peaks/troughs are detected on the amplitude series.")
-    st.write("Retracement timing measures **how many days until |Amplitude| shrinks to X% of its starting value**.")
+    st.write("Retracement timing measures **how many days until |Amplitude| shrinks to X% of its starting value OR crosses the MA**.")
     st.write("The sensitivity table aggregates retracement behavior across all detected inflexions in the lookback window.")
 
 # =========================================================
