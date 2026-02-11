@@ -1361,9 +1361,7 @@ with tab3:
     st.markdown(
         f"Found **{len(day_display)}** historical instances of Day {input_day}. "
         f"**{in_range_count}** fall within selected range "
-        f"<span style='color:#00AA00; font-weight:600;'>"
-        f"[\\${input_spread_lower:.2f}, \\${input_spread_upper:.2f})"
-        f"</span> 
+        f"<span style='color: #00AA00; font-weight: bold;'>[${input_spread_lower:.2f}, ${input_spread_upper:.2f})</span> "
         f"(highlighted in <span style='background-color: #90EE90; padding: 2px 4px;'>green</span> below).",
         unsafe_allow_html=True
     )
@@ -1374,7 +1372,6 @@ with tab3:
     col_day2.metric("Median", f"${day_data['spread_close'].median():.2f}")
     col_day3.metric("Std Dev", f"${day_data['spread_close'].std():.2f}")
     col_day4.metric("Range",f"[\\${day_data['spread_close'].min():.2f}, \\${day_data['spread_close'].max():.2f}]")
-
     
     # Display table with styling
     styled_table = day_display.style.apply(highlight_range, axis=1)
@@ -1889,5 +1886,3 @@ with tab3:
         
         fig_curve.tight_layout()
     st.pyplot(fig_curve, use_container_width=True)
-
-
