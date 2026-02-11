@@ -1324,10 +1324,18 @@ with tab3:
             key="prob_upper"
         )
     
+    # Determine next trading day (handle month rollover)
+    next_day = 1 if input_day >= 23 else input_day + 1
+    
     st.markdown(
-            f"**Query:** Given spread is in **[${input_spread_lower:.2f}, ${input_spread_upper:.2f})** "
-            f"on **Day {input_day}**, what are the probabilities for **Day {input_day + 1}**?"
-        )
+        f"**Query:** Given spread is in "
+        f"<span style='color: #00AA00; font-weight: bold;'>[${input_spread_lower:.2f}, ${input_spread_upper:.2f})</span> "
+        f"on **Day {input_day}**, what are the probabilities for **Day {next_day}**?",
+        unsafe_allow_html=True
+    )
+    
+    if input_day >= 23:
+        st.info("ℹ️ Day 23+ rolls over to Day 1 of the next month")
     
     # --- Show all historical spreads for the selected trading day ---
     st.markdown("---")
@@ -1348,10 +1356,14 @@ with tab3:
             return ['background-color: #90EE90'] * len(row)  # Light green
         return [''] * len(row)
     
+    in_range_count = len(day_display[(day_display['Spread'] >= input_spread_lower) & (day_display['Spread'] < input_spread_upper)])
+    
     st.markdown(
         f"Found **{len(day_display)}** historical instances of Day {input_day}. "
-        f"**{len(day_display[(day_display['Spread'] >= input_spread_lower) & (day_display['Spread'] < input_spread_upper)])}** "
-        f"fall within selected range (highlighted in green)."
+        f"**{in_range_count}** fall within selected range "
+        f"<span style='color: #00AA00; font-weight: bold;'>[${input_spread_lower:.2f}, ${input_spread_upper:.2f})</span> "
+        f"(highlighted in <span style='background-color: #90EE90; padding: 2px 4px;'>green</span> below).",
+        unsafe_allow_html=True
     )
     
     # Calculate statistics for this trading day
@@ -1384,50 +1396,35 @@ with tab3:
         for month in df_plot['Month'].unique():
             month_data = df_plot[(df_plot['Year'] == year) & (df_plot['Month'] == month)].sort_values('TradingDay')
             
-            # Get current day and next day data
+            # Get current day data
             current_day_data = month_data[month_data['TradingDay'] == input_day]
-            next_day_data = month_data[month_data['TradingDay'] == input_day + 1]
             
-            if len(current_day_data) > 0 and len(next_day_data) > 0:
+            if len(current_day_data) > 0:
                 current_spread_hist = current_day_data['spread_close'].iloc[0]
-                next_spread_hist = next_day_data['spread_close'].iloc[0]
+                current_timestamp = current_day_data['Timestamp'].iloc[0]
                 
-                # Only include if current spread is in the specified range
+                # Only proceed if current spread is in the specified range
                 if input_spread_lower <= current_spread_hist < input_spread_upper:
-                    transition_data.append({
-                        'current_spread': current_spread_hist,
-                        'next_spread': next_spread_hist,
-                        'year': year,
-                        'month': month,
-                        'date': current_day_data['Timestamp'].iloc[0]
-                    })
-    
-    # ... rest of your existing code continues ...
-    
-    # Filter historical transitions from input day to next day
-    transition_data = []
-    
-    for year in df_plot['Year'].unique():
-        for month in df_plot['Month'].unique():
-            month_data = df_plot[(df_plot['Year'] == year) & (df_plot['Month'] == month)].sort_values('TradingDay')
-            
-            # Get current day and next day data
-            current_day_data = month_data[month_data['TradingDay'] == input_day]
-            next_day_data = month_data[month_data['TradingDay'] == input_day + 1]
-            
-            if len(current_day_data) > 0 and len(next_day_data) > 0:
-                current_spread_hist = current_day_data['spread_close'].iloc[0]
-                next_spread_hist = next_day_data['spread_close'].iloc[0]
-                
-                # Only include if current spread is in the specified range
-                if input_spread_lower <= current_spread_hist < input_spread_upper:
-                    transition_data.append({
-                        'current_spread': current_spread_hist,
-                        'next_spread': next_spread_hist,
-                        'year': year,
-                        'month': month,
-                        'date': current_day_data['Timestamp'].iloc[0]
-                    })
+                    # Handle next day (could be next month if Day 23+)
+                    if input_day >= 23:
+                        # Look for Day 1 of next month
+                        next_month = month + 1 if month < 12 else 1
+                        next_year = year if month < 12 else year + 1
+                        next_month_data = df_plot[(df_plot['Year'] == next_year) & (df_plot['Month'] == next_month)].sort_values('TradingDay')
+                        next_day_data = next_month_data[next_month_data['TradingDay'] == 1]
+                    else:
+                        # Same month, next trading day
+                        next_day_data = month_data[month_data['TradingDay'] == next_day]
+                    
+                    if len(next_day_data) > 0:
+                        next_spread_hist = next_day_data['spread_close'].iloc[0]
+                        transition_data.append({
+                            'current_spread': current_spread_hist,
+                            'next_spread': next_spread_hist,
+                            'year': year,
+                            'month': month,
+                            'date': current_timestamp
+                        })
     
     if len(transition_data) == 0:
         st.warning(
@@ -1491,7 +1488,7 @@ with tab3:
         display_prob_table['Cumulative_%'] = display_prob_table['Cumulative_%'].round(2)
         
         # Display
-        st.markdown(f"#### Probability Table: Day {input_day + 1} Outcomes")
+        st.markdown(f"#### Probability Table: Day {next_day} Outcomes")
         st.dataframe(
             display_prob_table,
             use_container_width=True,
@@ -1523,7 +1520,7 @@ with tab3:
             history_display = transition_df[['date', 'current_spread', 'next_spread']].copy()
             history_display['date'] = pd.to_datetime(history_display['date']).dt.strftime('%Y-%m-%d')
             history_display['change'] = history_display['next_spread'] - history_display['current_spread']
-            history_display.columns = ['Date', f'Day {input_day} Spread', f'Day {input_day+1} Spread', 'Change']
+            history_display.columns = ['Date', f'Day {input_day} Spread', f'Day {next_day} Spread', 'Change']
             history_display = history_display.sort_values('Date', ascending=False)
             
             st.dataframe(
@@ -1532,7 +1529,7 @@ with tab3:
                 hide_index=True,
                 column_config={
                     f'Day {input_day} Spread': st.column_config.NumberColumn(format="$%.2f"),
-                    f'Day {input_day+1} Spread': st.column_config.NumberColumn(format="$%.2f"),
+                    f'Day {next_day} Spread': st.column_config.NumberColumn(format="$%.2f"),
                     'Change': st.column_config.NumberColumn(format="$%.2f")
                 }
             )
