@@ -1513,7 +1513,9 @@ with tab3:
         col_stat1.metric("Mean Next Day", f"${mean_next:.2f}")
         col_stat2.metric("Median Next Day", f"${median_next:.2f}")
         col_stat3.metric("Std Dev", f"${std_next:.2f}")
-        col_stat4.metric("Most Likely Range", most_likely_range)
+        clean_range = most_likely_range.replace("$", "")
+        col_stat4.metric("Most Likely Range ($)", clean_range)
+
         
         # Show the actual historical instances
         with st.expander(f"📋 View {len(transition_df)} Historical Instances"):
@@ -1886,3 +1888,4 @@ with tab3:
         
         fig_curve.tight_layout()
     st.pyplot(fig_curve, use_container_width=True)
+
