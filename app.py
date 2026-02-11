@@ -1371,7 +1371,8 @@ with tab3:
     col_day1.metric("Mean", f"${day_data['spread_close'].mean():.2f}")
     col_day2.metric("Median", f"${day_data['spread_close'].median():.2f}")
     col_day3.metric("Std Dev", f"${day_data['spread_close'].std():.2f}")
-    col_day4.metric("Range", f"[${day_data['spread_close'].min():.2f}, ${day_data['spread_close'].max():.2f}]")
+    col_day4.metric("Range",f"[\\${day_data['spread_close'].min():.2f}, \\${day_data['spread_close'].max():.2f}]")
+
     
     # Display table with styling
     styled_table = day_display.style.apply(highlight_range, axis=1)
@@ -1886,3 +1887,4 @@ with tab3:
         
         fig_curve.tight_layout()
     st.pyplot(fig_curve, use_container_width=True)
+
