@@ -1329,9 +1329,8 @@ with tab3:
     
     st.markdown(
         f"**Query:** Given spread is in "
-        f"<span style='color: #00AA00; font-weight: bold;'>[${input_spread_lower:.2f}, ${input_spread_upper:.2f})</span> "
-        f"on **Day {input_day}**, what are the probabilities for **Day {next_day}**?",
-        unsafe_allow_html=True
+        f":green[**[${input_spread_lower:.2f}, ${input_spread_upper:.2f})**] "
+        f"on **Day {input_day}**, what are the probabilities for **Day {next_day}**?"
     )
     
     if input_day >= 23:
@@ -1886,3 +1885,4 @@ with tab3:
         
         fig_curve.tight_layout()
     st.pyplot(fig_curve, use_container_width=True)
+
