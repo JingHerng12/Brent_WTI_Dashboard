@@ -1285,21 +1285,44 @@ with tab3:
     fig.tight_layout()
     st.pyplot(fig, use_container_width=True)
 
-# --- 5. CONDITIONAL PROBABILITY ANALYSIS ---
+# --- 5. CONDITIONAL PROBABILITY ANALYSIS (REGIME-BASED) ---
     st.markdown("---")
-    st.markdown(f"### Conditional Probability: Next Day Forecast")
+    st.markdown(f"### Conditional Probability: Next Regime Forecast")
+    
+    # Define regime mapping function
+    def get_regime(trading_day):
+        """Map trading day to regime"""
+        if 1 <= trading_day <= 8:
+            return "Early (Days 1-8)"
+        elif 9 <= trading_day <= 16:
+            return "Mid (Days 9-16)"
+        elif 17 <= trading_day <= 23:
+            return "Late (Days 17-23)"
+        else:
+            return "Unknown"
+    
+    def get_next_regime(regime):
+        """Get the next regime"""
+        if regime == "Early (Days 1-8)":
+            return "Mid (Days 9-16)"
+        elif regime == "Mid (Days 9-16)":
+            return "Late (Days 17-23)"
+        elif regime == "Late (Days 17-23)":
+            return "Early (Days 1-8)"  # Rolls over to next month
+        return "Unknown"
+    
+    # Add regime column to dataframe
+    df_plot['Regime'] = df_plot['TradingDay'].apply(get_regime)
     
     # User inputs
     col_input1, col_input2, col_input3 = st.columns(3)
     
     with col_input1:
-        input_day = st.number_input(
-            "Current Trading Day",
-            min_value=1,
-            max_value=int(df_plot['TradingDay'].max()),
-            value=current_trading_day,
-            step=1,
-            key="prob_day"
+        input_regime = st.selectbox(
+            "Current Regime",
+            options=["Early (Days 1-8)", "Mid (Days 9-16)", "Late (Days 17-23)"],
+            index=0,  # Default to Early
+            key="prob_regime"
         )
     
     with col_input2:
@@ -1324,31 +1347,31 @@ with tab3:
             key="prob_upper"
         )
     
-    # Determine next trading day (handle month rollover)
-    next_day = 1 if input_day >= 23 else input_day + 1
+    # Determine next regime
+    next_regime = get_next_regime(input_regime)
     
     st.markdown(
         f"**Query:** Given spread is in "
         f"<span style='color: #00AA00; font-weight: bold;'>[${input_spread_lower:.2f}, ${input_spread_upper:.2f})</span> "
-        f"on **Day {input_day}**, what are the probabilities for **Day {next_day}**?",
+        f"during **{input_regime}**, what are the probabilities for **{next_regime}**?",
         unsafe_allow_html=True
     )
     
-    if input_day >= 23:
-        st.info("ℹ️ Day 23+ rolls over to Day 1 of the next month")
+    if input_regime == "Late (Days 17-23)":
+        st.info("ℹ️ Late regime rolls over to Early regime of the next month")
     
-    # --- Show all historical spreads for the selected trading day ---
+    # --- Show all historical spreads for the selected regime ---
     st.markdown("---")
-    st.markdown(f"#### Historical Spreads on Day {input_day}")
+    st.markdown(f"#### Historical Spreads in {input_regime}")
     
-    # Get all instances of the selected trading day
-    day_data = df_plot[df_plot['TradingDay'] == input_day].copy()
-    day_data = day_data.sort_values('Timestamp', ascending=False)
+    # Get all instances of the selected regime
+    regime_data = df_plot[df_plot['Regime'] == input_regime].copy()
+    regime_data = regime_data.sort_values('Timestamp', ascending=False)
     
-    # Create display table
-    day_display = day_data[['Timestamp', 'spread_close', 'Year', 'Month']].copy()
-    day_display['Timestamp'] = pd.to_datetime(day_display['Timestamp']).dt.strftime('%Y-%m-%d')
-    day_display.columns = ['Date', 'Spread', 'Year', 'Month']
+    # Create display table (sample first 100 rows for performance)
+    regime_display = regime_data[['Timestamp', 'TradingDay', 'spread_close', 'Year', 'Month']].head(100).copy()
+    regime_display['Timestamp'] = pd.to_datetime(regime_display['Timestamp']).dt.strftime('%Y-%m-%d')
+    regime_display.columns = ['Date', 'Day', 'Spread', 'Year', 'Month']
     
     # Highlight rows that fall within the selected range
     def highlight_range(row):
@@ -1356,30 +1379,32 @@ with tab3:
             return ['background-color: #90EE90'] * len(row)  # Light green
         return [''] * len(row)
     
-    in_range_count = len(day_display[(day_display['Spread'] >= input_spread_lower) & (day_display['Spread'] < input_spread_upper)])
+    in_range_count = len(regime_data[(regime_data['spread_close'] >= input_spread_lower) & 
+                                      (regime_data['spread_close'] < input_spread_upper)])
     
     st.markdown(
-        f"Found **{len(day_display)}** historical instances of Day {input_day}. "
+        f"Found **{len(regime_data)}** historical instances in {input_regime}. "
         f"**{in_range_count}** fall within selected range "
         f"<span style='color: #00AA00; font-weight: bold;'>[${input_spread_lower:.2f}, ${input_spread_upper:.2f})</span> "
-        f"(highlighted in <span style='background-color: #90EE90; padding: 2px 4px;'>green</span> below).",
+        f"(showing first 100, highlighted in <span style='background-color: #90EE90; padding: 2px 4px;'>green</span>).",
         unsafe_allow_html=True
     )
     
-    # Calculate statistics for this trading day
+    # Calculate statistics for this regime
     col_day1, col_day2, col_day3, col_day4 = st.columns(4)
-    col_day1.metric("Mean", f"${day_data['spread_close'].mean():.2f}")
-    col_day2.metric("Median", f"${day_data['spread_close'].median():.2f}")
-    col_day3.metric("Std Dev", f"${day_data['spread_close'].std():.2f}")
-    col_day4.metric("Range",f"[\\${day_data['spread_close'].min():.2f}, \\${day_data['spread_close'].max():.2f}]")
+    col_day1.metric("Mean", f"${regime_data['spread_close'].mean():.2f}")
+    col_day2.metric("Median", f"${regime_data['spread_close'].median():.2f}")
+    col_day3.metric("Std Dev", f"${regime_data['spread_close'].std():.2f}")
+    col_day4.metric("Range",f"[\\${regime_data['spread_close'].min():.2f}, \\${regime_data['spread_close'].max():.2f}]")
     
     # Display table with styling
-    styled_table = day_display.style.apply(highlight_range, axis=1)
+    styled_table = regime_display.style.apply(highlight_range, axis=1)
     st.dataframe(
         styled_table,
         use_container_width=True,
         hide_index=True,
         column_config={
+            "Day": st.column_config.NumberColumn(format="%d"),
             "Spread": st.column_config.NumberColumn(format="$%.2f"),
             "Year": st.column_config.NumberColumn(format="%d"),
             "Month": st.column_config.NumberColumn(format="%d")
@@ -1389,54 +1414,74 @@ with tab3:
     
     st.markdown("---")
     
-    # Filter historical transitions from input day to next day
+    # Filter historical transitions from current regime to next regime
     transition_data = []
     
     for year in df_plot['Year'].unique():
         for month in df_plot['Month'].unique():
             month_data = df_plot[(df_plot['Year'] == year) & (df_plot['Month'] == month)].sort_values('TradingDay')
             
-            # Get current day data
-            current_day_data = month_data[month_data['TradingDay'] == input_day]
+            # Get current regime data for this month
+            current_regime_data = month_data[month_data['Regime'] == input_regime]
             
-            if len(current_day_data) > 0:
-                current_spread_hist = current_day_data['spread_close'].iloc[0]
-                current_timestamp = current_day_data['Timestamp'].iloc[0]
-                
-                # Only proceed if current spread is in the specified range
-                if input_spread_lower <= current_spread_hist < input_spread_upper:
-                    # Handle next day (could be next month if Day 23+)
-                    if input_day >= 23:
-                        # Look for Day 1 of next month
-                        next_month = month + 1 if month < 12 else 1
-                        next_year = year if month < 12 else year + 1
-                        next_month_data = df_plot[(df_plot['Year'] == next_year) & (df_plot['Month'] == next_month)].sort_values('TradingDay')
-                        next_day_data = next_month_data[next_month_data['TradingDay'] == 1]
-                    else:
-                        # Same month, next trading day
-                        next_day_data = month_data[month_data['TradingDay'] == next_day]
+            if len(current_regime_data) > 0:
+                # For each day in the current regime, check if spread is in range
+                for _, current_row in current_regime_data.iterrows():
+                    current_spread_hist = current_row['spread_close']
+                    current_trading_day = current_row['TradingDay']
+                    current_timestamp = current_row['Timestamp']
                     
-                    if len(next_day_data) > 0:
-                        next_spread_hist = next_day_data['spread_close'].iloc[0]
-                        transition_data.append({
-                            'current_spread': current_spread_hist,
-                            'next_spread': next_spread_hist,
-                            'year': year,
-                            'month': month,
-                            'date': current_timestamp
-                        })
+                    # Only proceed if current spread is in the specified range
+                    if input_spread_lower <= current_spread_hist < input_spread_upper:
+                        # Handle next day (could be next month if Late regime)
+                        if input_regime == "Late (Days 17-23)":
+                            # Look for first day of Early regime in next month
+                            next_month = month + 1 if month < 12 else 1
+                            next_year = year if month < 12 else year + 1
+                            next_month_data = df_plot[(df_plot['Year'] == next_year) & 
+                                                     (df_plot['Month'] == next_month)].sort_values('TradingDay')
+                            next_regime_data = next_month_data[next_month_data['Regime'] == next_regime]
+                            
+                            # Get first day of next regime
+                            if len(next_regime_data) > 0:
+                                next_row = next_regime_data.iloc[0]
+                        else:
+                            # Same month, next trading day
+                            next_day = current_trading_day + 1
+                            next_day_data = month_data[month_data['TradingDay'] == next_day]
+                            
+                            if len(next_day_data) > 0:
+                                next_row = next_day_data.iloc[0]
+                            else:
+                                continue
+                        
+                        # Add transition if next day exists
+                        if 'next_row' in locals():
+                            next_spread_hist = next_row['spread_close']
+                            next_trading_day = next_row['TradingDay']
+                            
+                            transition_data.append({
+                                'current_spread': current_spread_hist,
+                                'current_day': current_trading_day,
+                                'next_spread': next_spread_hist,
+                                'next_day': next_trading_day,
+                                'year': year,
+                                'month': month,
+                                'date': current_timestamp
+                            })
+                            del next_row  # Clean up for next iteration
     
     if len(transition_data) == 0:
         st.warning(
-            f"⚠️ No historical data found where Day {input_day} spread was in range "
+            f"⚠️ No historical data found where {input_regime} spread was in range "
             f"[${input_spread_lower:.2f}, ${input_spread_upper:.2f})"
         )
     else:
         transition_df = pd.DataFrame(transition_data)
         
         st.success(
-            f"✓ Found **{len(transition_df)} historical instances** matching your criteria "
-            f"(from {len(transition_df)} unique months)"
+            f"✓ Found **{len(transition_df)} historical transitions** matching your criteria "
+            f"(from **{input_regime}** → **{next_regime}**)"
         )
         
         # Calculate next day outcome bins
@@ -1469,7 +1514,7 @@ with tab3:
         prob_table = prob_table.sort_values('Probability_%', ascending=False).reset_index(drop=True)
         
         # Format the range column
-        prob_table['Next_Day_Spread_Range'] = prob_table.apply(
+        prob_table['Next_Regime_Spread_Range'] = prob_table.apply(
             lambda row: f"[${row['Range_Lower']:.2f}, ${row['Range_Upper']:.2f})", axis=1
         )
         
@@ -1478,7 +1523,7 @@ with tab3:
         
         # Final display table
         display_prob_table = prob_table[[
-            'Next_Day_Spread_Range', 
+            'Next_Regime_Spread_Range', 
             'Count', 
             'Probability_%', 
             'Cumulative_%'
@@ -1488,13 +1533,13 @@ with tab3:
         display_prob_table['Cumulative_%'] = display_prob_table['Cumulative_%'].round(2)
         
         # Display
-        st.markdown(f"#### Probability Table: Day {next_day} Outcomes")
+        st.markdown(f"#### Probability Table: {next_regime} Outcomes")
         st.dataframe(
             display_prob_table,
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Next_Day_Spread_Range": st.column_config.TextColumn("Next Day Spread Range"),
+                "Next_Regime_Spread_Range": st.column_config.TextColumn(f"{next_regime} Spread Range"),
                 "Count": st.column_config.NumberColumn("# Occurrences", format="%d"),
                 "Probability_%": st.column_config.NumberColumn("Probability (%)", format="%.2f%%"),
                 "Cumulative_%": st.column_config.NumberColumn("Cumulative (%)", format="%.2f%%")
@@ -1508,21 +1553,20 @@ with tab3:
         mean_next = next_day_spreads.mean()
         median_next = next_day_spreads.median()
         std_next = next_day_spreads.std()
-        most_likely_range = display_prob_table.iloc[0]['Next_Day_Spread_Range']
+        most_likely_range = display_prob_table.iloc[0]['Next_Regime_Spread_Range']
         
-        col_stat1.metric("Mean Next Day", f"${mean_next:.2f}")
-        col_stat2.metric("Median Next Day", f"${median_next:.2f}")
+        col_stat1.metric(f"Mean ({next_regime})", f"${mean_next:.2f}")
+        col_stat2.metric(f"Median ({next_regime})", f"${median_next:.2f}")
         col_stat3.metric("Std Dev", f"${std_next:.2f}")
         clean_range = most_likely_range.replace("$", "")
         col_stat4.metric("Most Likely Range ($)", clean_range)
-
         
         # Show the actual historical instances
-        with st.expander(f"📋 View {len(transition_df)} Historical Instances"):
-            history_display = transition_df[['date', 'current_spread', 'next_spread']].copy()
+        with st.expander(f"📋 View {len(transition_df)} Historical Transitions"):
+            history_display = transition_df[['date', 'current_day', 'current_spread', 'next_day', 'next_spread']].copy()
             history_display['date'] = pd.to_datetime(history_display['date']).dt.strftime('%Y-%m-%d')
             history_display['change'] = history_display['next_spread'] - history_display['current_spread']
-            history_display.columns = ['Date', f'Day {input_day} Spread', f'Day {next_day} Spread', 'Change']
+            history_display.columns = ['Date', 'Current Day', f'{input_regime} Spread', 'Next Day', f'{next_regime} Spread', 'Change']
             history_display = history_display.sort_values('Date', ascending=False)
             
             st.dataframe(
@@ -1530,8 +1574,10 @@ with tab3:
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    f'Day {input_day} Spread': st.column_config.NumberColumn(format="$%.2f"),
-                    f'Day {next_day} Spread': st.column_config.NumberColumn(format="$%.2f"),
+                    'Current Day': st.column_config.NumberColumn(format="%d"),
+                    'Next Day': st.column_config.NumberColumn(format="%d"),
+                    f'{input_regime} Spread': st.column_config.NumberColumn(format="$%.2f"),
+                    f'{next_regime} Spread': st.column_config.NumberColumn(format="$%.2f"),
                     'Change': st.column_config.NumberColumn(format="$%.2f")
                 }
             )
@@ -1888,4 +1934,3 @@ with tab3:
         
         fig_curve.tight_layout()
     st.pyplot(fig_curve, use_container_width=True)
-
