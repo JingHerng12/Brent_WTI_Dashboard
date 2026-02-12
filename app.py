@@ -17,7 +17,7 @@ st.title("Brent–WTI Dashboards")
 # -----------------------------
 # Tab Selection
 # -----------------------------
-tab1, tab2, tab3 = st.tabs(["Default", "Weighted", "Calendar"])
+tab1, tab2, tab3, tab4 = st.tabs(["Default", "Weighted", "Calendar", "Curvature"])
 
 # -----------------------------
 # Load Data
@@ -1581,11 +1581,399 @@ with tab3:
                     'Change': st.column_config.NumberColumn(format="$%.2f")
                 }
             )
-    
-    # =========================================================
-    # CURVATURE ANALYSIS
-    # =========================================================
+# --- 6. EXPECTED VALUE CALCULATOR (REGIME-BASED) ---
     st.markdown("---")
+    st.markdown(f"### Expected Value Calculator: Regime-Based Spread Forecast")
+    
+    st.markdown("""
+    This calculator uses **backward induction** to estimate the expected spread value at month-end:
+    - **Late Regime**: Terminal value = midpoint of spread range 
+    - **Mid Regime**: EV = weighted average of Late regime midpoints
+    - **Early Regime**: EV = weighted average of Mid regime EVs
+    
+    **Methodology**: Starting from the end and working backward, each regime's EV is calculated by weighting the possible outcomes in the next regime by their transition probabilities.
+    """)
+    
+    # Define regime mapping (same as before)
+    def get_regime(trading_day):
+        if 1 <= trading_day <= 8:
+            return "Early (Days 1-8)"
+        elif 9 <= trading_day <= 16:
+            return "Mid (Days 9-16)"
+        elif 17 <= trading_day <= 23:
+            return "Late (Days 17-23)"
+        else:
+            return "Unknown"
+    
+    def get_next_regime(regime):
+        if regime == "Early (Days 1-8)":
+            return "Mid (Days 9-16)"
+        elif regime == "Mid (Days 9-16)":
+            return "Late (Days 17-23)"
+        elif regime == "Late (Days 17-23)":
+            return "Early (Days 1-8)"  # Rolls over but not used in EV calc
+        return "Unknown"
+    
+    # Add regime column if not already present
+    if 'Regime' not in df_plot.columns:
+        df_plot['Regime'] = df_plot['TradingDay'].apply(get_regime)
+    
+    # User inputs
+    col_ev1, col_ev2, col_ev3 = st.columns(3)
+    
+    with col_ev1:
+        ev_regime = st.selectbox(
+            "Starting Regime",
+            options=["Early (Days 1-8)", "Mid (Days 9-16)", "Late (Days 17-23)"],
+            index=0,
+            key="ev_regime"
+        )
+    
+    with col_ev2:
+        ev_spread_lower = st.number_input(
+            "Current Spread Range Lower ($)",
+            min_value=-10.0,
+            max_value=5.0,
+            value=float(np.floor(current_spread * 4) / 4),  # ← USE CURRENT SPREAD
+            step=0.25,
+            format="%.2f",
+            key="ev_lower"
+        )
+
+    with col_ev3:
+        ev_spread_upper = st.number_input(
+            "Current Spread Range Upper ($)",
+            min_value=-10.0,
+            max_value=5.0,
+            value=float(np.floor(current_spread * 4) / 4) + 0.25,  # ← USE CURRENT SPREAD + 0.25
+            step=0.25,
+            format="%.2f",
+            key="ev_upper"
+        )
+    
+    if ev_spread_upper <= ev_spread_lower:
+        st.error("⚠️ Upper bound must be greater than lower bound")
+    else:
+        # Helper function to calculate transition probabilities
+        def get_transition_probabilities(from_regime, spread_lower, spread_upper, bin_size=0.25):
+            """
+            Calculate probability distribution of next-day spreads given current regime and spread range
+            Returns: DataFrame with spread bins and their probabilities
+            """
+            to_regime = get_next_regime(from_regime)
+            transition_data = []
+            
+            for year in df_plot['Year'].unique():
+                for month in df_plot['Month'].unique():
+                    month_data = df_plot[(df_plot['Year'] == year) & (df_plot['Month'] == month)].sort_values('TradingDay')
+                    current_regime_data = month_data[month_data['Regime'] == from_regime]
+                    
+                    if len(current_regime_data) > 0:
+                        for _, current_row in current_regime_data.iterrows():
+                            current_spread_hist = current_row['spread_close']
+                            current_trading_day = current_row['TradingDay']
+                            
+                            if spread_lower <= current_spread_hist < spread_upper:
+                                # Handle next day transition
+                                if from_regime == "Late (Days 17-23)":
+                                    next_month = month + 1 if month < 12 else 1
+                                    next_year = year if month < 12 else year + 1
+                                    next_month_data = df_plot[(df_plot['Year'] == next_year) & 
+                                                             (df_plot['Month'] == next_month)].sort_values('TradingDay')
+                                    next_regime_data = next_month_data[next_month_data['Regime'] == to_regime]
+                                    
+                                    if len(next_regime_data) > 0:
+                                        next_row = next_regime_data.iloc[0]
+                                        next_spread = next_row['spread_close']
+                                        transition_data.append(next_spread)
+                                else:
+                                    next_day = current_trading_day + 1
+                                    next_day_data = month_data[month_data['TradingDay'] == next_day]
+                                    
+                                    if len(next_day_data) > 0:
+                                        next_spread = next_day_data.iloc[0]['spread_close']
+                                        transition_data.append(next_spread)
+            
+            if len(transition_data) == 0:
+                return None
+            
+            # Create bins and calculate probabilities
+            transition_spreads = np.array(transition_data)
+            min_spread = transition_spreads.min()
+            max_spread = transition_spreads.max()
+            
+            bins = np.arange(
+                np.floor(min_spread / bin_size) * bin_size,
+                np.ceil(max_spread / bin_size) * bin_size + bin_size,
+                bin_size
+            )
+            
+            counts, bin_edges = np.histogram(transition_spreads, bins=bins)
+            probabilities = counts / counts.sum()
+            
+            # Create dataframe with bin ranges and probabilities
+            result_df = pd.DataFrame({
+                'spread_lower': bin_edges[:-1],
+                'spread_upper': bin_edges[1:],
+                'probability': probabilities,
+                'count': counts
+            })
+            
+            # Only keep non-zero probabilities
+            result_df = result_df[result_df['count'] > 0].reset_index(drop=True)
+            
+            # Add midpoint for EV calculation
+            result_df['spread_midpoint'] = (result_df['spread_lower'] + result_df['spread_upper']) / 2
+            
+            return result_df
+        
+        # Calculate EV based on starting regime
+        st.markdown("---")
+        st.markdown(f"#### Calculating EV from {ev_regime}")
+        
+        # Calculate current spread midpoint for comparison
+        current_spread_midpoint = (ev_spread_lower + ev_spread_upper) / 2
+        
+        with st.spinner("Computing probabilities and expected values..."):
+            
+            if ev_regime == "Late (Days 17-23)":
+                # LATE REGIME: Terminal value = midpoint (no forward calculation)
+                st.markdown("##### Late Regime: Terminal Values (Midpoints)")
+                
+                late_probs = get_transition_probabilities("Late (Days 17-23)", ev_spread_lower, ev_spread_upper)
+                
+                if late_probs is None:
+                    st.error(f"No historical data found for Late regime in range [${ev_spread_lower:.2f}, ${ev_spread_upper:.2f})")
+                else:
+                    # Late EV is simply the midpoint - this is the terminal value
+                    late_probs['late_ev'] = late_probs['spread_midpoint']
+                    late_probs['ev_contribution'] = late_probs['late_ev'] * late_probs['probability']
+                    final_ev = late_probs['ev_contribution'].sum()
+                    
+                    # Display results
+                    st.success(f"**Expected Value: ${final_ev:.4f}**")
+                    
+                    expected_change = final_ev - current_spread_midpoint
+                    change_direction = "NARROW" if expected_change > 0 else "WIDEN"
+                    
+                    col_ev_summary1, col_ev_summary2, col_ev_summary3 = st.columns(3)
+                    col_ev_summary1.metric("Current Spread (Midpoint)", f"${current_spread_midpoint:.4f}")
+                    col_ev_summary2.metric("Expected Final Spread", f"${final_ev:.4f}")
+                    col_ev_summary3.metric(f"Expected Change ({change_direction})", f"${expected_change:.4f}")
+                    
+                    # Show probability distribution
+                    display_late = late_probs[['spread_lower', 'spread_upper', 'spread_midpoint', 
+                                               'probability', 'ev_contribution']].copy()
+                    display_late['probability_pct'] = display_late['probability'] * 100
+                    display_late['spread_range'] = display_late.apply(
+                        lambda row: f"[${row['spread_lower']:.2f}, ${row['spread_upper']:.2f})", axis=1
+                    )
+                    
+                    display_late = display_late[['spread_range', 'spread_midpoint', 'probability_pct', 'ev_contribution']]
+                    display_late.columns = ['Spread Range', 'Terminal Value (Midpoint)', 'Probability (%)', 'EV Contribution']
+                    
+                    st.dataframe(
+                        display_late,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            'Terminal Value (Midpoint)': st.column_config.NumberColumn(format="$%.4f"),
+                            'Probability (%)': st.column_config.NumberColumn(format="%.2f%%"),
+                            'EV Contribution': st.column_config.NumberColumn(format="$%.4f")
+                        }
+                    )
+                    
+            elif ev_regime == "Mid (Days 9-16)":
+                # MID REGIME: Mid → Late (use Late midpoints as terminal values)
+                st.markdown("##### Step 1: Mid → Late Transition")
+                
+                mid_to_late = get_transition_probabilities("Mid (Days 9-16)", ev_spread_lower, ev_spread_upper)
+                
+                if mid_to_late is None:
+                    st.error(f"No historical data found for Mid regime in range [${ev_spread_lower:.2f}, ${ev_spread_upper:.2f})")
+                else:
+                    st.info(f"Found {len(mid_to_late)} possible Late regime outcomes")
+                    
+                    # For each possible Late regime outcome, use its midpoint as the terminal value
+                    st.markdown("##### Step 2: Late Regime Terminal Values")
+                    
+                    late_evs = []
+                    for _, row in mid_to_late.iterrows():
+                        late_spread_lower = row['spread_lower']
+                        late_spread_upper = row['spread_upper']
+                        late_spread_midpoint = row['spread_midpoint']
+                        prob_reach_late = row['probability']
+                        
+                        # Late EV is simply the midpoint (terminal value)
+                        late_ev = late_spread_midpoint
+                        
+                        late_evs.append({
+                            'late_spread_range': f"[${late_spread_lower:.2f}, ${late_spread_upper:.2f})",
+                            'prob_from_mid': prob_reach_late,
+                            'late_ev': late_ev,
+                            'weighted_ev': prob_reach_late * late_ev
+                        })
+                    
+                    late_ev_df = pd.DataFrame(late_evs)
+                    final_ev = late_ev_df['weighted_ev'].sum()
+                    
+                    st.success(f"**Expected Value: ${final_ev:.4f}**")
+                    
+                    expected_change = final_ev - current_spread_midpoint
+                    change_direction = "NARROW" if expected_change > 0 else "WIDEN"
+                    
+                    col_ev_summary1, col_ev_summary2, col_ev_summary3 = st.columns(3)
+                    col_ev_summary1.metric("Current Spread (Midpoint)", f"${current_spread_midpoint:.4f}")
+                    col_ev_summary2.metric("Expected Final Spread", f"${final_ev:.4f}")
+                    col_ev_summary3.metric(f"Expected Change ({change_direction})", f"${expected_change:.4f}")
+                    
+                    # Display breakdown
+                    display_mid = late_ev_df.copy()
+                    display_mid['prob_from_mid_pct'] = display_mid['prob_from_mid'] * 100
+                    display_mid = display_mid[['late_spread_range', 'prob_from_mid_pct', 'late_ev', 'weighted_ev']]
+                    display_mid.columns = ['Late Spread Range', 'Prob from Mid (%)', 'Late EV (Midpoint)', 'Weighted EV']
+                    
+                    st.dataframe(
+                        display_mid,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            'Prob from Mid (%)': st.column_config.NumberColumn(format="%.2f%%"),
+                            'Late EV (Midpoint)': st.column_config.NumberColumn(format="$%.4f"),
+                            'Weighted EV': st.column_config.NumberColumn(format="$%.4f")
+                        }
+                    )
+                    
+            else:  # Early regime
+                # EARLY REGIME: Early → Mid → Late (use Late midpoints as terminal values)
+                st.markdown("##### Step 1: Early → Mid Transition")
+                
+                early_to_mid = get_transition_probabilities("Early (Days 1-8)", ev_spread_lower, ev_spread_upper)
+                
+                if early_to_mid is None:
+                    st.error(f"No historical data found for Early regime in range [${ev_spread_lower:.2f}, ${ev_spread_upper:.2f})")
+                else:
+                    st.info(f"Found {len(early_to_mid)} possible Mid regime outcomes")
+                    
+                    # For each Mid outcome, calculate its EV (which involves Late calculations)
+                    st.markdown("##### Step 2: Mid → Late Transitions for Each Outcome")
+                    
+                    mid_evs = []
+                    for _, mid_row in early_to_mid.iterrows():
+                        mid_spread_lower = mid_row['spread_lower']
+                        mid_spread_upper = mid_row['spread_upper']
+                        mid_spread_midpoint = mid_row['spread_midpoint']
+                        prob_reach_mid = mid_row['probability']
+                        
+                        # Calculate EV from this Mid position
+                        mid_to_late = get_transition_probabilities("Mid (Days 9-16)", mid_spread_lower, mid_spread_upper)
+                        
+                        if mid_to_late is not None:
+                            # For each Late outcome from this Mid position, use midpoint as terminal value
+                            late_evs_from_this_mid = []
+                            for _, late_row in mid_to_late.iterrows():
+                                late_spread_midpoint = late_row['spread_midpoint']
+                                prob_reach_late = late_row['probability']
+                                
+                                # Late EV is simply the midpoint (terminal value)
+                                late_ev = late_spread_midpoint
+                                
+                                late_evs_from_this_mid.append(prob_reach_late * late_ev)
+                            
+                            mid_ev = sum(late_evs_from_this_mid)
+                        else:
+                            # Fallback to midpoint if no transition data
+                            mid_ev = mid_spread_midpoint
+                        
+                        mid_evs.append({
+                            'mid_spread_range': f"[${mid_spread_lower:.2f}, ${mid_spread_upper:.2f})",
+                            'prob_from_early': prob_reach_mid,
+                            'mid_ev': mid_ev,
+                            'weighted_ev': prob_reach_mid * mid_ev
+                        })
+                    
+                    mid_ev_df = pd.DataFrame(mid_evs)
+                    final_ev = mid_ev_df['weighted_ev'].sum()
+                    
+                    st.success(f"**Expected Value: ${final_ev:.4f}**")
+                    
+                    expected_change = final_ev - current_spread_midpoint
+                    change_direction = "NARROW" if expected_change > 0 else "WIDEN"
+                    
+                    col_ev_summary1, col_ev_summary2, col_ev_summary3 = st.columns(3)
+                    col_ev_summary1.metric("Current Spread (Midpoint)", f"${current_spread_midpoint:.4f}")
+                    col_ev_summary2.metric("Expected Final Spread", f"${final_ev:.4f}")
+                    col_ev_summary3.metric(f"Expected Change ({change_direction})", f"${expected_change:.4f}")
+                    
+                    # Display breakdown
+                    display_early = mid_ev_df.copy()
+                    display_early['prob_from_early_pct'] = display_early['prob_from_early'] * 100
+                    display_early = display_early[['mid_spread_range', 'prob_from_early_pct', 'mid_ev', 'weighted_ev']]
+                    display_early.columns = ['Mid Spread Range', 'Prob from Early (%)', 'Mid EV', 'Weighted EV']
+                    
+                    st.dataframe(
+                        display_early,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            'Prob from Early (%)': st.column_config.NumberColumn(format="%.2f%%"),
+                            'Mid EV': st.column_config.NumberColumn(format="$%.4f"),
+                            'Weighted EV': st.column_config.NumberColumn(format="$%.4f")
+                        }
+                    )
+        
+        # Summary box
+        st.markdown("---")
+        st.markdown("#### Summary")
+        
+        if 'final_ev' in locals():
+            col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
+            col_sum1.metric("Starting Regime", ev_regime)
+            col_sum2.metric("Starting Spread Range", f"[\\${ev_spread_lower:.2f}, \\${ev_spread_upper:.2f})")
+            col_sum3.metric("Expected Final Spread", f"${final_ev:.4f}")
+            
+            expected_change = final_ev - current_spread_midpoint
+            change_pct = (expected_change / abs(current_spread_midpoint)) * 100 if current_spread_midpoint != 0 else 0
+            col_sum4.metric("Expected Change", f"${expected_change:.4f} ({change_pct:.1f}%)")
+        
+        # Explanation
+        with st.expander("ℹ️ Methodology Explanation"):
+            st.markdown("""
+            **Backward Induction Approach:**
+            
+            This method works backward from the end of the month to calculate expected values:
+            
+            1. **Late Regime** (Terminal Stage):
+               - **EV = Midpoint of spread range**
+               - No forward calculation needed - this is the final payout
+               - Example: Range [-$4.00, -$3.75) → EV = -$3.875
+            
+            2. **Mid Regime**:
+               - Look at all possible Late outcomes from current Mid position
+               - For each Late outcome: use its **midpoint** as terminal value
+               - **Mid EV = Σ(Late_Midpoint × Probability_of_reaching_Late)**
+               - Example: 
+                 - 30% → Late [-$4.00, -$3.75), midpoint = -$3.875
+                 - 70% → Late [-$3.75, -$3.50), midpoint = -$3.625
+                 - Mid EV = 0.30×(-3.875) + 0.70×(-3.625) = -$3.700
+            
+            3. **Early Regime**:
+               - For each possible Mid outcome: calculate its EV (using step 2 logic)
+               - **Early EV = Σ(Mid_EV × Probability_of_reaching_Mid)**
+               - This creates a two-level backward calculation tree
+            
+            **Key Points:**
+            - Late regime spreads are treated as **terminal values** 
+            - All probabilities are based on **historical transition patterns**
+            - The $0.25 bin size using midpoints provides a good approximation
+            - **Expected Change** = Expected Final Spread - Current Spread
+              - Positive change = spread **narrows** (moves toward zero)
+              - Negative change = spread **widens** (moves away from zero)
+            """)
+# =========================================================
+# TAB 4: CURVATURE ANALYSIS
+# =========================================================
+with tab4:
     st.subheader("Futures Curve Analysis")
     
     # --- Load multi-contract data using existing cached function ---
@@ -1620,7 +2008,17 @@ with tab3:
         
         return df
     
-    df_curve = load_curve_data(int(YEARS_TO_INCLUDE))
+    # Use the same YEARS_TO_INCLUDE from tab3 or create a new one
+    curve_years = st.number_input(
+        "Lookback Years",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1,
+        key="curve_years",
+    )
+    
+    df_curve = load_curve_data(int(curve_years))
     
     # --- Initialize session state for clear functionality ---
     if 'compare_key_counter' not in st.session_state:
@@ -1748,7 +2146,7 @@ with tab3:
         ax_futures.spines['left'].set_color('gray')
         ax_futures.spines['right'].set_color('gray')
     
-    # Plot 2: Spread Bars with Statistical Overlays
+        # Plot 2: Spread Bars with Statistical Overlays
         bar_width = 0.35 if show_comparison else 0.5
         
         bars_current = ax_spread_curve.bar(
@@ -1799,15 +2197,12 @@ with tab3:
         # Calculate trading day for current date
         current_year = current_date.year
         current_month = current_date.month
-        current_trading_day = int(df_plot[
-            (df_plot['Timestamp'].dt.year == current_year) & 
-            (df_plot['Timestamp'].dt.month == current_month) & 
-            (df_plot['Timestamp'] == current_date)
-        ]['TradingDay'].iloc[0]) if len(df_plot[
-            (df_plot['Timestamp'].dt.year == current_year) & 
-            (df_plot['Timestamp'].dt.month == current_month) & 
-            (df_plot['Timestamp'] == current_date)
-        ]) > 0 else None
+        current_trading_day_filter = df_curve_with_trading_day[
+            (df_curve_with_trading_day['Timestamp'].dt.year == current_year) & 
+            (df_curve_with_trading_day['Timestamp'].dt.month == current_month) & 
+            (df_curve_with_trading_day['Timestamp'] == current_date)
+        ]
+        current_trading_day = int(current_trading_day_filter['TradingDay'].iloc[0]) if len(current_trading_day_filter) > 0 else None
         
         # Calculate spreads for all contracts
         df_curve_with_trading_day["spread_C1"] = (
@@ -1852,15 +2247,12 @@ with tab3:
         if show_comparison:
             compare_year = compare_date.year
             compare_month = compare_date.month
-            compare_trading_day = int(df_plot[
-                (df_plot['Timestamp'].dt.year == compare_year) & 
-                (df_plot['Timestamp'].dt.month == compare_month) & 
-                (df_plot['Timestamp'] == compare_date)
-            ]['TradingDay'].iloc[0]) if len(df_plot[
-                (df_plot['Timestamp'].dt.year == compare_year) & 
-                (df_plot['Timestamp'].dt.month == compare_month) & 
-                (df_plot['Timestamp'] == compare_date)
-            ]) > 0 else None
+            compare_trading_day_filter = df_curve_with_trading_day[
+                (df_curve_with_trading_day['Timestamp'].dt.year == compare_year) & 
+                (df_curve_with_trading_day['Timestamp'].dt.month == compare_month) & 
+                (df_curve_with_trading_day['Timestamp'] == compare_date)
+            ]
+            compare_trading_day = int(compare_trading_day_filter['TradingDay'].iloc[0]) if len(compare_trading_day_filter) > 0 else None
             
             if compare_trading_day is not None:
                 # Loop through each contract and plot statistics
@@ -1933,4 +2325,5 @@ with tab3:
         ax_spread_curve.set_ylim(s_min - margin, s_max + margin)
         
         fig_curve.tight_layout()
+    
     st.pyplot(fig_curve, use_container_width=True)
