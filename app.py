@@ -1130,7 +1130,7 @@ with tab3:
         cutoff = df["Timestamp"].max() - pd.DateOffset(years=int(years))
         df = df[df["Timestamp"] >= cutoff].copy()
 
-        df["spread_close"] = df["WTI_CLOSE"] - df["Brent_CLOSE"]
+        df["spread_close"] = df["WTI_OPEN"] - df["Brent_OPEN"]
         df["Year"] = df["Timestamp"].dt.year
         df["Month"] = df["Timestamp"].dt.month
         df["TradingDay"] = df.groupby(["Year", "Month"])["Timestamp"].rank(method="first").astype(int)
@@ -2080,6 +2080,8 @@ with tab4:
             
             brent_compare = [row_compare[f"Brent_CLOSE_{c}"] for c in tenors]
             wti_compare = [row_compare[f"WTI_CLOSE_{c}"] for c in tenors]
+            brent_delta = [c - p for c, p in zip(brent_current, brent_compare)]  # $ change
+            wti_delta   = [c - p for c, p in zip(wti_current,   wti_compare)]    # $ change 
             spread_compare = [w - b for w, b in zip(wti_compare, brent_compare)]
             
             show_comparison = True
@@ -2106,6 +2108,18 @@ with tab4:
     if show_comparison:
         st.markdown(f"**Compare Date:** {compare_date.strftime('%Y-%m-%d')}{get_td_str(df_curve_with_trading_day, compare_date)}")
     
+    if show_comparison:
+        df_deltas = pd.DataFrame({
+            "Tenor": tenors,
+            "Brent Δ ($)": brent_delta,
+            "WTI Δ ($)": wti_delta,
+        })
+        st.markdown("### Compare → Current ($ Change)")
+        st.dataframe(
+            df_deltas.style.format({"Brent Δ ($)": "{:+.2f}", "WTI Δ ($)": "{:+.2f}"}),
+            use_container_width=True
+        )
+    
     # --- Create plots ---
     plt.close("all")
     
@@ -2125,14 +2139,14 @@ with tab4:
                        color='#00FFCC', label="Brent (Current)", linewidth=2)
         ax_futures.plot(x_pos, wti_current, marker="s", markersize=8, 
                        color='#FF3366', label="WTI (Current)", linewidth=2)
-        
+
         if show_comparison:
             ax_futures.plot(x_pos, brent_compare, marker="o", markersize=6, 
-                           color='#00FFCC', linewidth=1.5, linestyle='--', 
-                           alpha=0.5, label="Brent (Compare)")
+                        color='#00FFCC', linewidth=1.5, linestyle='--', 
+                        alpha=0.5, label="Brent (Compare)")
             ax_futures.plot(x_pos, wti_compare, marker="s", markersize=6, 
-                           color='#FF3366', linewidth=1.5, linestyle='--', 
-                           alpha=0.5, label="WTI (Compare)")
+                        color='#FF3366', linewidth=1.5, linestyle='--', 
+                        alpha=0.5, label="WTI (Compare)")
         
         ax_futures.set_xticks(x_pos)
         ax_futures.set_xticklabels(tenors, color='white')
@@ -2192,6 +2206,8 @@ with tab4:
                     fontsize=8,
                     color='#cccccc'
                 )
+
+            
         
         # --- ADD STATISTICAL OVERLAYS FOR ALL CONTRACTS ---
         # Calculate trading day for current date
