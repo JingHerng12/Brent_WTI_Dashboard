@@ -876,10 +876,15 @@ def build_lots_schedule(dates: pd.Series, total_brent: int, total_wti: int,
     Returns DataFrame with columns:
       Timestamp, Tb1,Tb2,Tb3,Tw1,Tw2, B1,B2,B3,W1,W2
     """
-    df = pd.DataFrame({"Timestamp": pd.to_datetime(dates).dt.normalize()}).drop_duplicates().sort_values("Timestamp")
+    
+    if total_wti % roll_days != 0:
+        raise ValueError(f"total_wti ({total_wti}) must be divisible by roll_days ({roll_days})")
+    w_roll_per_day = total_wti // roll_days
+
+    df = (pd.DataFrame({"Timestamp": pd.to_datetime(dates).dt.normalize()})
+          .drop_duplicates().sort_values("Timestamp").reset_index(drop=True))
     df["month"] = df["Timestamp"].dt.to_period("M")
 
-    # compute expiry dates & time-to-expiry (weekday-only)
     df["B1_exp"] = df["Timestamp"].apply(brent_c1_expiry)
     df["B2_exp"] = df["Timestamp"].apply(brent_c2_expiry)
     df["B3_exp"] = df["Timestamp"].apply(brent_c3_expiry)
@@ -892,75 +897,57 @@ def build_lots_schedule(dates: pd.Series, total_brent: int, total_wti: int,
     df["Tw1"] = df.apply(lambda r: bdays_to_expiry(r["Timestamp"], r["W1_exp"]), axis=1)
     df["Tw2"] = df.apply(lambda r: bdays_to_expiry(r["Timestamp"], r["W2_exp"]), axis=1)
 
-
-    # allocate lots columns
     df[["B1","B2","B3","W1","W2"]] = 0
 
-    # sanity: require clean integer daily roll for WTI
-    if total_wti % roll_days != 0:
-        raise ValueError(f"total_wti must be divisible by roll_days. Got total_wti={total_wti}, roll_days={roll_days}")
-    w_roll_per_day = total_wti // roll_days
-
-    # per-month logic
     for m, g in df.groupby("month", sort=True):
         idx = g.index
         if len(idx) == 0:
             continue
 
-        # baseline computed on first trading date we have for that month in the dataset
-        first_i = idx[0]
-        Tb1_0 = int(df.loc[first_i, "Tb1"])
-        Tb2_0 = int(df.loc[first_i, "Tb2"])
-        Tw1_0 = int(df.loc[first_i, "Tw1"])
+        first_i  = idx[0]
+        Tb1_0    = int(df.loc[first_i, "Tb1"])
+        Tb2_0    = int(df.loc[first_i, "Tb2"])
+        Tw1_0    = int(df.loc[first_i, "Tw1"])
+        W1_exp_0 = df.loc[first_i, "W1_exp"] 
 
-        target0 = total_wti * Tw1_0
-
-        # baseline: two-tenor Brent (B3=0), W1=total_wti
+        target0    = total_wti * Tw1_0
         b1_0, b2_0 = solve_two_tenor_integer(total_brent, Tb1_0, Tb2_0, target0)
-        b3_0 = 0
+        b3_0       = 0
 
-        # we will reduce B1 linearly to 0 over roll_days (like your example)
-        if b1_0 % roll_days != 0:
-            # still handle it by rounding daily decrement but keep integer
-            b1_roll_per_day = b1_0 / roll_days
-        else:
-            b1_roll_per_day = b1_0 // roll_days
-
-        # identify rollover window: last roll_days business days BEFORE Brent expiry
-        # approximate by using Tb1 (time-to-expiry) == roll_days..1
-        # (i.e., T-5 => Tb1=5, ..., T-1 => Tb1=1)
         for i in idx:
-            Tb1 = int(df.loc[i, "Tb1"])
-            Tb2 = int(df.loc[i, "Tb2"])
-            Tb3 = int(df.loc[i, "Tb3"])
-            Tw1 = int(df.loc[i, "Tw1"])
-            Tw2 = int(df.loc[i, "Tw2"])
+            Tb1          = int(df.loc[i, "Tb1"])
+            Tb2          = int(df.loc[i, "Tb2"])
+            Tb3          = int(df.loc[i, "Tb3"])
+            Tw1          = int(df.loc[i, "Tw1"])
+            Tw2          = int(df.loc[i, "Tw2"])
+            current_date = df.loc[i, "Timestamp"]
 
-            # default: hold baseline
-            B1 = b1_0
-            W2 = 0
+            if current_date > W1_exp_0:
 
-            # rollover window: Tb1 in [roll_days..1]
-            if 1 <= Tb1 <= roll_days:
-                step = roll_days - Tb1 + 1  # Tb1=5 -> step=1, ..., Tb1=1 -> step=5
-                # WTI rolls
-                W2 = min(total_wti, step * w_roll_per_day)
-                W1 = total_wti - W2
+                target_post      = total_wti * Tw2
+                b1_post, b2_post = solve_two_tenor_integer(total_brent, Tb2, Tb3, target_post)
+                df.loc[i, ["B1","B2","B3","W1","W2"]] = [b1_post, b2_post, 0, total_wti, 0]
 
-                # Brent B1 decays to 0
-                # use proportional decay from baseline b1_0
-                # B1 at step k = round(b1_0 * (1 - k/roll_days))
-                B1 = int(np.round(b1_0 * (1 - step / roll_days)))
-                B1 = int(np.clip(B1, 0, total_brent))
+            elif 1 <= Tb1 <= roll_days:
 
-                # match time exposure
+                step   = roll_days - Tb1 + 1
+                W2     = min(total_wti, step * w_roll_per_day)
+                W1     = total_wti - W2
+                B1     = int(np.clip(np.round(b1_0 * (1 - step / roll_days)), 0, total_brent))
                 target = W1 * Tw1 + W2 * Tw2
                 B2, B3 = solve_b2_b3_given_b1_integer(total_brent, B1, Tb1, Tb2, Tb3, target)
-
                 df.loc[i, ["B1","B2","B3","W1","W2"]] = [B1, B2, B3, W1, W2]
-            else:
-                # hold baseline (W1 full)
+
+            elif Tb1 > roll_days and current_date <= W1_exp_0:
+                # ---- PHASE 1: PRE-ROLL ----
                 df.loc[i, ["B1","B2","B3","W1","W2"]] = [b1_0, b2_0, b3_0, total_wti, 0]
+
+            else:
+                # ---- PHASE 3: POST-ROLL GAP ----
+
+                target_gap      = total_wti * Tw2
+                b1_gap, b2_gap  = solve_two_tenor_integer(total_brent, Tb2, Tb3, target_gap)
+                df.loc[i, ["B1","B2","B3","W1","W2"]] = [b1_gap, b2_gap, 0, 0, total_wti]
 
     return df.drop(columns=["month"])
 
