@@ -862,20 +862,6 @@ def solve_b2_b3_given_b1_integer(total_brent: int, b1: int, Tb1: int, Tb2: int, 
 # =========================================================
 def build_lots_schedule(dates: pd.Series, total_brent: int, total_wti: int,
                         roll_days: int = 5):
-    """
-    For each date:
-    - compute Tb1,Tb2,Tb3,Tw1,Tw2 via calendar proxies
-    - For each MONTH:
-        * on the first available trading date in that month: compute baseline B1/B2 (B3=0), W1=total_wti
-        * HOLD baseline until rollover window starts (T-roll_days ... T-1 relative to Brent C1 expiry)
-        * During rollover window:
-            - each day: roll W1 -> W2 by total_wti/roll_days lots per day (must divide evenly)
-            - reduce B1 by baseline_B1/roll_days lots per day (assume baseline_B1==roll_days in your example; we implement general)
-            - recompute B2/B3 each day to match time exposure
-        * After Brent expiry: relabel next month naturally via using new month baseline
-    Returns DataFrame with columns:
-      Timestamp, Tb1,Tb2,Tb3,Tw1,Tw2, B1,B2,B3,W1,W2
-    """
     
     if total_wti % roll_days != 0:
         raise ValueError(f"total_wti ({total_wti}) must be divisible by roll_days ({roll_days})")
@@ -899,6 +885,8 @@ def build_lots_schedule(dates: pd.Series, total_brent: int, total_wti: int,
 
     df[["B1","B2","B3","W1","W2"]] = 0
 
+    prev_W1_exp_0 = None  # carry previous month's WTI C1 expiry for gap detection
+
     for m, g in df.groupby("month", sort=True):
         idx = g.index
         if len(idx) == 0:
@@ -908,7 +896,7 @@ def build_lots_schedule(dates: pd.Series, total_brent: int, total_wti: int,
         Tb1_0    = int(df.loc[first_i, "Tb1"])
         Tb2_0    = int(df.loc[first_i, "Tb2"])
         Tw1_0    = int(df.loc[first_i, "Tw1"])
-        W1_exp_0 = df.loc[first_i, "W1_exp"] 
+        W1_exp_0 = df.loc[first_i, "W1_exp"]
 
         target0    = total_wti * Tw1_0
         b1_0, b2_0 = solve_two_tenor_integer(total_brent, Tb1_0, Tb2_0, target0)
@@ -922,14 +910,19 @@ def build_lots_schedule(dates: pd.Series, total_brent: int, total_wti: int,
             Tw2          = int(df.loc[i, "Tw2"])
             current_date = df.loc[i, "Timestamp"]
 
-            if current_date > W1_exp_0:
+            # Use previous month's W1_exp_0 as gap anchor if we're in a new
+            # calendar month but the old WTI C1 hasn't expired yet
+            gap_anchor = prev_W1_exp_0 if (prev_W1_exp_0 is not None and current_date <= prev_W1_exp_0) else W1_exp_0
 
+            if current_date > gap_anchor:
+                # ---- PHASE 4: POST-EXPIRY ----
+                # Old WTI C1 expired, df_c1 auto-rolled to held contract
                 target_post      = total_wti * Tw2
                 b1_post, b2_post = solve_two_tenor_integer(total_brent, Tb2, Tb3, target_post)
                 df.loc[i, ["B1","B2","B3","W1","W2"]] = [b1_post, b2_post, 0, total_wti, 0]
 
             elif 1 <= Tb1 <= roll_days:
-
+                # ---- PHASE 2: ROLL WINDOW ----
                 step   = roll_days - Tb1 + 1
                 W2     = min(total_wti, step * w_roll_per_day)
                 W1     = total_wti - W2
@@ -938,19 +931,21 @@ def build_lots_schedule(dates: pd.Series, total_brent: int, total_wti: int,
                 B2, B3 = solve_b2_b3_given_b1_integer(total_brent, B1, Tb1, Tb2, Tb3, target)
                 df.loc[i, ["B1","B2","B3","W1","W2"]] = [B1, B2, B3, W1, W2]
 
-            elif Tb1 > roll_days and current_date <= W1_exp_0:
+            elif Tb1 > roll_days and current_date <= gap_anchor:
                 # ---- PHASE 1: PRE-ROLL ----
                 df.loc[i, ["B1","B2","B3","W1","W2"]] = [b1_0, b2_0, b3_0, total_wti, 0]
 
             else:
                 # ---- PHASE 3: POST-ROLL GAP ----
-
+                # Roll done, new calendar month, old WTI C1 not yet expired
+                # Still holding old C2 → read from W2/df_c2
                 target_gap      = total_wti * Tw2
                 b1_gap, b2_gap  = solve_two_tenor_integer(total_brent, Tb2, Tb3, target_gap)
                 df.loc[i, ["B1","B2","B3","W1","W2"]] = [b1_gap, b2_gap, 0, 0, total_wti]
 
-    return df.drop(columns=["month"])
+        prev_W1_exp_0 = W1_exp_0  # carry forward for next month's gap detection
 
+    return df.drop(columns=["month"])
 # =========================================================
 # TAB 2: WEIGHTED SPREAD TRADING
 # =========================================================
@@ -1010,7 +1005,7 @@ with tab2:
 
     # ---- Join lots onto prices ----
     dfw = base.merge(lots_df[["Timestamp","Tb1","Tb2","Tb3","Tw1","Tw2","B1","B2","B3","W1","W2"]], on="Timestamp", how="left")
-
+    
     # ---- Compute weighted OHLC using lots as weights ----
     def wavg3(a1, a2, a3, w1, w2, w3):
         denom = (w1 + w2 + w3)
@@ -1315,7 +1310,7 @@ with tab3:
     with col_input2:
         input_spread_lower = st.number_input(
             "Spread Range Lower Bound ($)",
-            min_value=-10.0,
+            min_value=-25.0,
             max_value=5.0,
             value=float(np.floor(current_spread * 4) / 4),  # Round to nearest 0.25
             step=0.25,
@@ -1326,7 +1321,7 @@ with tab3:
     with col_input3:
         input_spread_upper = st.number_input(
             "Spread Range Upper Bound ($)",
-            min_value=-10.0,
+            min_value=-25.0,
             max_value=5.0,
             value=float(np.floor(current_spread * 4) / 4) + 0.25,
             step=0.25,
@@ -1619,7 +1614,7 @@ with tab3:
     with col_ev2:
         ev_spread_lower = st.number_input(
             "Current Spread Range Lower ($)",
-            min_value=-10.0,
+            min_value=-25.0,
             max_value=5.0,
             value=float(np.floor(current_spread * 4) / 4),  # ← USE CURRENT SPREAD
             step=0.25,
@@ -1630,7 +1625,7 @@ with tab3:
     with col_ev3:
         ev_spread_upper = st.number_input(
             "Current Spread Range Upper ($)",
-            min_value=-10.0,
+            min_value=-25.0,
             max_value=5.0,
             value=float(np.floor(current_spread * 4) / 4) + 0.25,  # ← USE CURRENT SPREAD + 0.25
             step=0.25,
@@ -1968,365 +1963,4 @@ with tab4:
     def load_curve_data(years: int) -> pd.DataFrame:
         # Reuse the existing load_data function from top of script
         df_c1 = load_data("Brent_WTI_C1.xlsx")
-        df_c2 = load_data("Brent_WTI_C2.xlsx")
-        df_c3 = load_data("Brent_WTI_C3.xlsx")
-        
-        # Apply lookback filter
-        cutoff = df_c1["Timestamp"].max() - pd.DateOffset(years=years)
-        df_c1 = df_c1[df_c1["Timestamp"] >= cutoff].copy()
-        df_c2 = df_c2[df_c2["Timestamp"] >= cutoff].copy()
-        df_c3 = df_c3[df_c3["Timestamp"] >= cutoff].copy()
-        
-        # Select only needed columns
-        df_c1_sub = df_c1[["Timestamp", "Brent_CLOSE", "WTI_CLOSE"]]
-        df_c2_sub = df_c2[["Timestamp", "Brent_CLOSE", "WTI_CLOSE"]]
-        df_c3_sub = df_c3[["Timestamp", "Brent_CLOSE", "WTI_CLOSE"]]
-        
-        # Merge
-        df = (
-            df_c1_sub.merge(df_c2_sub, on="Timestamp", suffixes=("_C1", "_C2"))
-                     .merge(df_c3_sub, on="Timestamp")
-                     .rename(columns={"Brent_CLOSE": "Brent_CLOSE_C3", "WTI_CLOSE": "WTI_CLOSE_C3"})
-        )
-        
-        need_cols = ["Brent_CLOSE_C1","Brent_CLOSE_C2","Brent_CLOSE_C3",
-                     "WTI_CLOSE_C1","WTI_CLOSE_C2","WTI_CLOSE_C3"]
-        df = df.dropna(subset=need_cols).reset_index(drop=True)
-        
-        return df
-    
-    # Use the same YEARS_TO_INCLUDE from tab3 or create a new one
-    curve_years = st.number_input(
-        "Lookback Years",
-        min_value=1,
-        max_value=20,
-        value=5,
-        step=1,
-        key="curve_years",
-    )
-    
-    df_curve = load_curve_data(int(curve_years))
-    
-    # --- Initialize session state for clear functionality ---
-    if 'compare_key_counter' not in st.session_state:
-        st.session_state.compare_key_counter = 0
-    
-    # --- Date selection controls ---
-    col1, col2, col3 = st.columns([2, 2, 1])
-    
-    with col1:
-        current_date_input = st.text_input(
-            "Current Date (YYYY-MM-DD)",
-            value=df_curve.iloc[-1]['Timestamp'].strftime('%Y-%m-%d'),
-            key="curve_current_date_input",
-            help="Enter date to view futures curve"
-        )
-    
-    with col2:
-        compare_date_input = st.text_input(
-            "Compare Date (YYYY-MM-DD)",
-            value="",
-            key=f"curve_compare_date_input_{st.session_state.compare_key_counter}",
-            help="Enter a date to overlay comparison curve"
-        )
-    
-    with col3:
-        if st.button("Clear", key="clear_curve_compare"):
-            # Increment counter to create new widget with empty value
-            st.session_state.compare_key_counter += 1
-            st.rerun()
-    
-    # --- Extract current date data ---
-    tenors = ["C1", "C2", "C3"]
-    x_pos = np.arange(len(tenors))
-    
-    # Handle current date selection
-    try:
-        target_current = pd.to_datetime(current_date_input)
-        current_idx = (df_curve['Timestamp'] - target_current).abs().idxmin()
-        row_current = df_curve.iloc[current_idx]
-        current_date = row_current['Timestamp']
-    except:
-        st.warning("Invalid current date format. Using latest date.")
-        current_idx = len(df_curve) - 1
-        row_current = df_curve.iloc[current_idx]
-        current_date = row_current['Timestamp']
-    
-    brent_current = [row_current[f"Brent_CLOSE_{c}"] for c in tenors]
-    wti_current = [row_current[f"WTI_CLOSE_{c}"] for c in tenors]
-    spread_current = [w - b for w, b in zip(wti_current, brent_current)]
-    
-    # --- Handle comparison date ---
-    show_comparison = False
-    if compare_date_input.strip():
-        try:
-            target_date = pd.to_datetime(compare_date_input)
-            compare_idx = (df_curve['Timestamp'] - target_date).abs().idxmin()
-            row_compare = df_curve.iloc[compare_idx]
-            compare_date = row_compare['Timestamp']
-            
-            brent_compare = [row_compare[f"Brent_CLOSE_{c}"] for c in tenors]
-            wti_compare = [row_compare[f"WTI_CLOSE_{c}"] for c in tenors]
-            brent_delta = [c - p for c, p in zip(brent_current, brent_compare)]  # $ change
-            wti_delta   = [c - p for c, p in zip(wti_current,   wti_compare)]    # $ change 
-            spread_compare = [w - b for w, b in zip(wti_compare, brent_compare)]
-            
-            show_comparison = True
-        except:
-            st.warning("Invalid compare date format. Please use YYYY-MM-DD")
-    
-    # --- Display current date info ---
-    df_curve_with_trading_day = df_curve.copy()
-    df_curve_with_trading_day["Year"] = df_curve_with_trading_day["Timestamp"].dt.year
-    df_curve_with_trading_day["Month"] = df_curve_with_trading_day["Timestamp"].dt.month
-    df_curve_with_trading_day["TradingDay"] = df_curve_with_trading_day.groupby(
-        ["Year", "Month"]
-    )["Timestamp"].rank(method="first").astype(int)
-
-    def get_td_str(df, target_date):
-        match = df[df['Timestamp'] == target_date]
-        if not match.empty:
-            return f" (Trading Day {int(match['TradingDay'].iloc[0])})"
-        return ""
-
-    # --- Display current and compare date info with Trading Day ---
-    st.markdown(f"**Current Date:** {current_date.strftime('%Y-%m-%d')}{get_td_str(df_curve_with_trading_day, current_date)}")
-
-    if show_comparison:
-        st.markdown(f"**Compare Date:** {compare_date.strftime('%Y-%m-%d')}{get_td_str(df_curve_with_trading_day, compare_date)}")
-    
-    if show_comparison:
-        df_deltas = pd.DataFrame({
-            "Tenor": tenors,
-            "Brent Δ ($)": brent_delta,
-            "WTI Δ ($)": wti_delta,
-        })
-        st.markdown("### Compare → Current ($ Change)")
-        st.dataframe(
-            df_deltas.style.format({"Brent Δ ($)": "{:+.2f}", "WTI Δ ($)": "{:+.2f}"}),
-            use_container_width=True
-        )
-    
-    # --- Create plots ---
-    plt.close("all")
-    
-    with plt.style.context('dark_background'):
-        fig_curve, (ax_futures, ax_spread_curve) = plt.subplots(
-            2, 1, figsize=(12, 8), 
-            gridspec_kw={'height_ratios': [2, 1]},
-            facecolor='#0e1117'
-        )
-        
-        # Set axes background color
-        ax_futures.set_facecolor('#262730')
-        ax_spread_curve.set_facecolor('#262730')
-        
-        # Plot 1: Futures Curve
-        ax_futures.plot(x_pos, brent_current, marker="o", markersize=8, 
-                       color='#00FFCC', label="Brent (Current)", linewidth=2)
-        ax_futures.plot(x_pos, wti_current, marker="s", markersize=8, 
-                       color='#FF3366', label="WTI (Current)", linewidth=2)
-
-        if show_comparison:
-            ax_futures.plot(x_pos, brent_compare, marker="o", markersize=6, 
-                        color='#00FFCC', linewidth=1.5, linestyle='--', 
-                        alpha=0.5, label="Brent (Compare)")
-            ax_futures.plot(x_pos, wti_compare, marker="s", markersize=6, 
-                        color='#FF3366', linewidth=1.5, linestyle='--', 
-                        alpha=0.5, label="WTI (Compare)")
-        
-        ax_futures.set_xticks(x_pos)
-        ax_futures.set_xticklabels(tenors, color='white')
-        ax_futures.set_ylabel("Price ($/bbl)", fontsize=11, color='white')
-        ax_futures.grid(True, alpha=0.15, linestyle='--', color='gray')
-        ax_futures.legend(loc='upper right', bbox_to_anchor=(0.99, 0.99), 
-                 frameon=True, shadow=False, facecolor='#1e1e1e', edgecolor='gray')
-        ax_futures.tick_params(colors='white')
-        ax_futures.spines['bottom'].set_color('gray')
-        ax_futures.spines['top'].set_color('gray')
-        ax_futures.spines['left'].set_color('gray')
-        ax_futures.spines['right'].set_color('gray')
-    
-        # Plot 2: Spread Bars with Statistical Overlays
-        bar_width = 0.35 if show_comparison else 0.5
-        
-        bars_current = ax_spread_curve.bar(
-            x_pos - (bar_width/2 if show_comparison else 0), 
-            spread_current, 
-            width=bar_width,
-            color=['#00FFCC' if s >= 0 else '#FF5500' for s in spread_current],
-            alpha=0.7,
-            label='Current Spread'
-        )
-        
-        # Add value labels for current
-        for i, (bar, val) in enumerate(zip(bars_current, spread_current)):
-            ax_spread_curve.text(
-                bar.get_x() + bar.get_width()/2, 
-                val - 0.15 if val < 0 else val + 0.15,
-                f'${val:.2f}',
-                ha='center', 
-                va='top' if val < 0 else 'bottom',
-                fontsize=9,
-                fontweight='bold',
-                color='white'
-            )
-        
-        if show_comparison:
-            bars_compare = ax_spread_curve.bar(
-                x_pos + bar_width/2, 
-                spread_compare, 
-                width=bar_width,
-                color=['#888888' if s >= 0 else '#666666' for s in spread_compare],
-                alpha=0.4,
-                label='Compare Spread'
-            )
-            
-            # Add value labels for comparison
-            for i, (bar, val) in enumerate(zip(bars_compare, spread_compare)):
-                ax_spread_curve.text(
-                    bar.get_x() + bar.get_width()/2, 
-                    val - 0.15 if val < 0 else val + 0.15,
-                    f'${val:.2f}',
-                    ha='center', 
-                    va='top' if val < 0 else 'bottom',
-                    fontsize=8,
-                    color='#cccccc'
-                )
-
-            
-        
-        # --- ADD STATISTICAL OVERLAYS FOR ALL CONTRACTS ---
-        # Calculate trading day for current date
-        current_year = current_date.year
-        current_month = current_date.month
-        current_trading_day_filter = df_curve_with_trading_day[
-            (df_curve_with_trading_day['Timestamp'].dt.year == current_year) & 
-            (df_curve_with_trading_day['Timestamp'].dt.month == current_month) & 
-            (df_curve_with_trading_day['Timestamp'] == current_date)
-        ]
-        current_trading_day = int(current_trading_day_filter['TradingDay'].iloc[0]) if len(current_trading_day_filter) > 0 else None
-        
-        # Calculate spreads for all contracts
-        df_curve_with_trading_day["spread_C1"] = (
-            df_curve_with_trading_day["WTI_CLOSE_C1"] - df_curve_with_trading_day["Brent_CLOSE_C1"]
-        )
-        df_curve_with_trading_day["spread_C2"] = (
-            df_curve_with_trading_day["WTI_CLOSE_C2"] - df_curve_with_trading_day["Brent_CLOSE_C2"]
-        )
-        df_curve_with_trading_day["spread_C3"] = (
-            df_curve_with_trading_day["WTI_CLOSE_C3"] - df_curve_with_trading_day["Brent_CLOSE_C3"]
-        )
-        
-        if current_trading_day is not None:
-            # Loop through each contract and plot statistics
-            for i, contract in enumerate(['C1', 'C2', 'C3']):
-                day_data = df_curve_with_trading_day[
-                    df_curve_with_trading_day['TradingDay'] == current_trading_day
-                ][f'spread_{contract}']
-                
-                if len(day_data) > 0:
-                    current_mean = day_data.mean()
-                    current_std = day_data.std()
-                    current_upper_95 = current_mean + 2 * current_std
-                    current_lower_95 = current_mean - 2 * current_std
-                    
-                    # Plot mean and 95% range for current date
-                    ax_spread_curve.errorbar(
-                        x_pos[i] - (bar_width/2 if show_comparison else 0),
-                        current_mean,
-                        yerr=[[current_mean - current_lower_95], [current_upper_95 - current_mean]],
-                        fmt='D',
-                        color='#FFD700',
-                        markersize=5,
-                        capsize=6,
-                        capthick=1.5,
-                        elinewidth=1.5,   
-                        alpha=0.7,
-                        zorder=9
-                    )
-        
-        # Add statistical overlay for compare date if present
-        if show_comparison:
-            compare_year = compare_date.year
-            compare_month = compare_date.month
-            compare_trading_day_filter = df_curve_with_trading_day[
-                (df_curve_with_trading_day['Timestamp'].dt.year == compare_year) & 
-                (df_curve_with_trading_day['Timestamp'].dt.month == compare_month) & 
-                (df_curve_with_trading_day['Timestamp'] == compare_date)
-            ]
-            compare_trading_day = int(compare_trading_day_filter['TradingDay'].iloc[0]) if len(compare_trading_day_filter) > 0 else None
-            
-            if compare_trading_day is not None:
-                # Loop through each contract and plot statistics
-                for i, contract in enumerate(['C1', 'C2', 'C3']):
-                    compare_day_data = df_curve_with_trading_day[
-                        df_curve_with_trading_day['TradingDay'] == compare_trading_day
-                    ][f'spread_{contract}']
-                    
-                    if len(compare_day_data) > 0:
-                        compare_mean = compare_day_data.mean()
-                        compare_std = compare_day_data.std()
-                        compare_upper_95 = compare_mean + 2 * compare_std
-                        compare_lower_95 = compare_mean - 2 * compare_std
-                        
-                        # Plot mean and 95% range for compare date
-                        ax_spread_curve.errorbar(
-                            x_pos[i] + bar_width/2,
-                            compare_mean,
-                            yerr=[[compare_mean - compare_lower_95], [compare_upper_95 - compare_mean]],
-                            fmt='D',
-                            color='#FFD700',
-                            markersize=5,
-                            capsize=6,
-                            capthick=1.5,
-                            elinewidth=1.5,
-                            alpha=0.7,
-                            zorder=9
-                        )
-        
-        ax_spread_curve.set_xticks(x_pos)
-        ax_spread_curve.set_xticklabels(tenors, color='white')
-        ax_spread_curve.set_ylabel("Spread", fontsize=11, color='white')
-        ax_spread_curve.axhline(0, color='white', linewidth=1.2)
-        ax_spread_curve.grid(True, alpha=0.15, axis='y', color='gray', linestyle='--')
-        ax_spread_curve.tick_params(colors='white')
-        ax_spread_curve.spines['bottom'].set_color('gray')
-        ax_spread_curve.spines['top'].set_color('gray')
-        ax_spread_curve.spines['left'].set_color('gray')
-        ax_spread_curve.spines['right'].set_color('gray')
-
-        # Auto-scale y-axis for spread with appropriate margins
-        all_spreads = spread_current + (spread_compare if show_comparison else [])
-        
-        # Include statistical ranges in y-axis calculation
-        if current_trading_day is not None:
-            for contract in ['C1', 'C2', 'C3']:
-                day_data = df_curve_with_trading_day[
-                    df_curve_with_trading_day['TradingDay'] == current_trading_day
-                ][f'spread_{contract}']
-                if len(day_data) > 0:
-                    all_spreads.extend([
-                        day_data.mean() - 2 * day_data.std(),
-                        day_data.mean() + 2 * day_data.std()
-                    ])
-        
-        if show_comparison and compare_trading_day is not None:
-            for contract in ['C1', 'C2', 'C3']:
-                compare_day_data = df_curve_with_trading_day[
-                    df_curve_with_trading_day['TradingDay'] == compare_trading_day
-                ][f'spread_{contract}']
-                if len(compare_day_data) > 0:
-                    all_spreads.extend([
-                        compare_day_data.mean() - 2 * compare_day_data.std(),
-                        compare_day_data.mean() + 2 * compare_day_data.std()
-                    ])
-        
-        s_min = min(all_spreads)
-        s_max = max(all_spreads)
-        margin = (s_max - s_min) * 0.15
-        ax_spread_curve.set_ylim(s_min - margin, s_max + margin)
-        
-        fig_curve.tight_layout()
-    
-    st.pyplot(fig_curve, use_container_width=True)
+        df_c2 = load_data("Brent_WTI_C2.xls
